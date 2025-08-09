@@ -1,0 +1,35 @@
+{
+  "name": "ai-resume-parser-firebase-nextjs-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "rm -rf out && next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@fontsource/roboto": "^5.2.5",
+    "@mui/icons-material": "^7.1.0",
+    "@mui/material": "^7.1.0",
+    "@mui/x-data-grid": "^8.5.0",
+    "@mui/x-date-pickers": "^8.5.0",
+    "axios": "^1.9.0",
+    "date-fns": "^4.1.0",
+    "dayjs": "^1.11.13",
+    "firebase": "^11.8.1",
+    "html2canvas": "^1.4.1",
+    "js-cookie": "^3.0.5",
+    "jspdf": "^3.0.1",
+    "next": "14.2.2",
+    "qrcode.react": "^4.2.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "eslint-config-next": "14.2.2"
+  }
+}

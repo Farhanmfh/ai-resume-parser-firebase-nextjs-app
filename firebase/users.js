@@ -10,7 +10,7 @@ export const handleUserSignIn = async (user) => {
   try {
     // For new users, set initial role
     if (user.metadata.creationTime === user.metadata.lastSignInTime) {
-      await updateRole(user.uid, 'customer');
+      await updateRole(user.uid, 'standardUser');
       // Force token refresh to get the new role
       await user.getIdToken(true);
     }

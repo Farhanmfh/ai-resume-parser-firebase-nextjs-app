@@ -1,21 +1,25 @@
-'use client'
+ 'use client'
+import { createContext, useEffect, useMemo, useState } from 'react';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
-// Create a theme instance
-const theme = createTheme({
+export const ColorModeContext = createContext({ mode: 'light', toggleColorMode: () => {} });
+
+const getDesignTokens = (mode) => ({
   palette: {
+    mode,
     primary: {
       main: '#2359FF',
     },
     background: {
-      default: '#F5F5F5',
-      paper: '#FFFFFF',
+      default: mode === 'dark' ? '#0b0f17' : '#F5F5F5',
+      paper: mode === 'dark' ? '#0f172a' : '#FFFFFF',
     },
     text: {
-      primary: '#333333',
-      secondary: '#666666',
+      primary: mode === 'dark' ? '#e5e7eb' : '#333333',
+      secondary: mode === 'dark' ? '#9ca3af' : '#666666',
     },
+    divider: mode === 'dark' ? '#1f2937' : '#e5e7eb',
   },
   typography: {
     fontFamily: ['Inter', 'sans-serif'].join(','),
@@ -26,31 +30,16 @@ const theme = createTheme({
       textTransform: 'none',
       fontWeight: 500,
     },
-    h6: {
-      fontWeight: 600,
-    },
-    subtitle1: {
-      fontWeight: 500,
-      fontSize: '0.9375rem',
-    },
-    subtitle2: {
-      fontWeight: 500,
-      fontSize: '0.875rem',
-    },
-    body1: {
-      fontSize: '1rem',
-    },
-    body2: {
-      fontSize: '0.875rem',
-    },
+    h6: { fontWeight: 600 },
+    subtitle1: { fontWeight: 500, fontSize: '0.9375rem' },
+    subtitle2: { fontWeight: 500, fontSize: '0.875rem' },
+    body1: { fontSize: '1rem' },
+    body2: { fontSize: '0.875rem' },
   },
   components: {
     MuiTypography: {
       defaultProps: {
-        variantMapping: {
-          subtitle1: 'p',
-          subtitle2: 'p',
-        },
+        variantMapping: { subtitle1: 'p', subtitle2: 'p' },
       },
     },
     MuiButton: {
@@ -60,22 +49,14 @@ const theme = createTheme({
           borderRadius: 8,
           boxShadow: 'none',
           fontFamily: ['Inter', 'sans-serif'].join(','),
-          '&:hover': {
-            boxShadow: 'none',
-          },
+          '&:hover': { boxShadow: 'none' },
         },
       },
-      defaultProps: {
-        disableRipple: true,
-      },
+      defaultProps: { disableRipple: true },
     },
     MuiTextField: {
       styleOverrides: {
-        root: {
-          '& .MuiOutlinedInput-root': {
-            borderRadius: 8,
-          },
-        },
+        root: { '& .MuiOutlinedInput-root': { borderRadius: 8 } },
       },
     },
     MuiPaper: {
@@ -83,28 +64,7 @@ const theme = createTheme({
         root: {
           borderRadius: 8,
           boxShadow: '0px 1px 3px rgba(0, 0, 0, 0.1)',
-        },
-      },
-    },
-    MuiBottomNavigationAction: {
-      styleOverrides: {
-        root: {
-          fontFamily: ['Inter', 'sans-serif'].join(','),
-          '& .MuiBottomNavigationAction-label': {
-            fontFamily: ['Inter', 'sans-serif'].join(','),
-            fontSize: '0.75rem',
-          },
-          '&.Mui-selected .MuiBottomNavigationAction-label': {
-            fontSize: '0.75rem',
-            fontWeight: 500,
-          },
-        },
-      },
-    },
-    MuiTab: {
-      styleOverrides: {
-        root: {
-          fontFamily: ['Inter', 'sans-serif'].join(','),
+          backgroundImage: 'none',
         },
       },
     },
@@ -112,10 +72,30 @@ const theme = createTheme({
 });
 
 export function Providers({ children }) {
+  const [mode, setMode] = useState('dark');
+
+  useEffect(() => {
+    const stored = typeof window !== 'undefined' ? localStorage.getItem('themeMode') : null;
+    if (stored === 'light' || stored === 'dark') setMode(stored);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('themeMode', mode);
+  }, [mode]);
+
+  const colorMode = useMemo(() => ({
+    mode,
+    toggleColorMode: () => setMode((prev) => (prev === 'light' ? 'dark' : 'light')),
+  }), [mode]);
+
+  const theme = useMemo(() => createTheme(getDesignTokens(mode)), [mode]);
+
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      {children}
-    </ThemeProvider>
+    <ColorModeContext.Provider value={colorMode}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        {children}
+      </ThemeProvider>
+    </ColorModeContext.Provider>
   );
 }

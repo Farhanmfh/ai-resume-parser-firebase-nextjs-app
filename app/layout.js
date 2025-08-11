@@ -2,6 +2,8 @@ import './globals.css';
 import { Inter } from 'next/font/google';
 import { Providers } from './providers';
 import { AuthContextProvider } from '@/context/AuthContext';
+import NavBar from '@/components/NavBar';
+import Footer from '@/components/Footer';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -24,7 +26,11 @@ export default function RootLayout({ children }) {
       <body style={{ margin: 0, backgroundColor: '#f5f5f5' }}>
         <Providers>
           <AuthContextProvider>
-            {children}
+            <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+              <NavBar />
+              <main style={{ flex: 1 }}>{children}</main>
+              <Footer />
+            </div>
           </AuthContextProvider>
         </Providers>
       </body>

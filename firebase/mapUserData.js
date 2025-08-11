@@ -6,6 +6,6 @@ export const mapUserData = async (user) => {
     email: user.email,
     token: tokenResult.token,
     name: user.displayName,
-    role: tokenResult.claims.role || "customer",
+    role: tokenResult.claims.role || "standardUser",
   };
 };

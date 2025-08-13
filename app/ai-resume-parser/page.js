@@ -5,11 +5,11 @@ import { useTheme } from '@mui/material/styles';
 import withAuth from '@/firebase/withAuth';
 import { db, storage, functions } from '@/firebase/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, getBlob } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getFileBlobUrl, cleanupBlobUrl } from '@/utils/storageHelper';
 import { httpsCallable } from 'firebase/functions';
-import { Document, Page, pdfjs } from 'react-pdf';
-import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
-import 'react-pdf/dist/esm/Page/TextLayer.css';
+import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
+
 import ReactMarkdown from 'react-markdown';
 import {
   Box,
@@ -35,7 +35,6 @@ function AiResumeParserPage({ user }) {
   const [chatMessages, setChatMessages] = useState([]); // {role: 'user'|'assistant', content}
   const [isChatLoading, setIsChatLoading] = useState(false);
   const theme = useTheme();
-  const [numPages, setNumPages] = useState(null);
   const [pdfError, setPdfError] = useState('');
   const [pdfBlobUrl, setPdfBlobUrl] = useState('');
   const pdfBlobUrlRef = useRef('');
@@ -59,36 +58,36 @@ function AiResumeParserPage({ user }) {
     }
   }, [chatMessages]);
 
-  // Fetch PDF as blob to avoid CORS issues
+  // Fetch PDF URL for display
   useEffect(() => {
-    if (uploadedUrl && isPdf) {
-      const fetchPdfAsBlob = async () => {
+    if (uploadedUrl && isPdf && storagePath) {
+      const fetchPdfUrl = async () => {
         try {
-          console.log('Fetching PDF as blob from Firebase Storage');
-          // Use Firebase Storage SDK instead of fetch to avoid CORS
-          const storageRef = ref(storage, storagePath);
-          const blob = await getBlob(storageRef);
-          const blobUrl = URL.createObjectURL(blob);
-          setPdfBlobUrl(blobUrl);
-          pdfBlobUrlRef.current = blobUrl;
-          console.log('PDF blob created successfully');
+          // Use our utility helper to get the PDF URL
+          const result = await getFileBlobUrl(storagePath);
+          if (result && result.directUrl) {
+            setPdfBlobUrl(result.directUrl);
+            pdfBlobUrlRef.current = result.directUrl;
+            setPdfError(''); // Clear any previous errors
+          } else {
+            setPdfError('Failed to load PDF. You can still download and view the file.');
+          }
         } catch (error) {
-          console.error('Error fetching PDF as blob:', error);
+          console.error('PDF fetch error:', error);
           setPdfError('Failed to load PDF. You can still download and view the file.');
         }
       };
       
-      fetchPdfAsBlob();
+      fetchPdfUrl();
     }
     
-    // Cleanup blob URL when component unmounts or URL changes
+    // No cleanup needed for iframe URLs
     return () => {
-      if (pdfBlobUrlRef.current) {
-        URL.revokeObjectURL(pdfBlobUrlRef.current);
-        pdfBlobUrlRef.current = '';
-      }
+      // Cleanup not needed for iframe
     };
   }, [uploadedUrl, isPdf, storagePath]);
+
+
 
   const maxBytes = 5 * 1024 * 1024; // 5MB
   const allowedTypes = [
@@ -114,17 +113,11 @@ function AiResumeParserPage({ user }) {
 
   const handleFileChange = (e) => {
     const chosen = e.target.files?.[0] || null;
-    // Clean up previous blob URL
-    if (pdfBlobUrlRef.current) {
-      URL.revokeObjectURL(pdfBlobUrlRef.current);
-      pdfBlobUrlRef.current = '';
-    }
     setFile(chosen);
     setUploadedUrl('');
     setStoragePath('');
     setError('');
     setPdfError('');
-    setNumPages(null);
     setPdfBlobUrl('');
   };
 
@@ -142,53 +135,40 @@ function AiResumeParserPage({ user }) {
       const path = `resumes/${timestamp}_${user?.id || 'user'}_${safeName}`;
       const storageRef = ref(storage, path);
 
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
-      setUploadedUrl(url);
-      setStoragePath(path);
-      setIsUploading(false); // stop spinner as soon as file upload completes
+             await uploadBytes(storageRef, file);
+       const url = await getDownloadURL(storageRef);
+               setUploadedUrl(url);
+        setStoragePath(path);
+        
+        setIsUploading(false); // stop spinner as soon as file upload completes
 
-      // Save metadata with retry mechanism
-      const saveToFirestore = async (retryCount = 0) => {
-        try {
-          console.log('Attempting to save to Firestore, attempt:', retryCount + 1);
-          console.log('User ID:', user?.id);
-          console.log('Collection path:', 'resumes');
-          
-          const docData = {
-            userId: user?.id || null,
-            filePath: path,
-            fileURL: url,
-            uploadedAt: serverTimestamp(),
-            source: 'ai-resume-parser',
-          };
-          console.log('Document data to save:', docData);
-          
-          const docRef = await addDoc(collection(db, 'resumes'), docData);
-          console.log('Resume metadata saved to Firestore successfully, doc ID:', docRef.id);
-        } catch (error) {
-          console.error(`Firestore save attempt ${retryCount + 1} failed:`, error);
-          console.error('Error code:', error.code);
-          console.error('Error message:', error.message);
-          console.error('Full error object:', error);
-          
-          if (retryCount < 2) {
-            console.log(`Retrying in 2 seconds... (attempt ${retryCount + 1})`);
-            // Retry after 2 seconds
-            setTimeout(() => saveToFirestore(retryCount + 1), 2000);
-          } else {
-            console.error('All retry attempts failed');
-            setError('Uploaded file saved, but we could not save details. Please retry later.');
-          }
-        }
-      };
+       // Save metadata with retry mechanism
+       const saveToFirestore = async (retryCount = 0) => {
+         try {
+           const docData = {
+             userId: user?.id || null,
+             filePath: path,
+             fileURL: url,
+             uploadedAt: serverTimestamp(),
+             source: 'ai-resume-parser',
+           };
+           
+           await addDoc(collection(db, 'resumes'), docData);
+         } catch (error) {
+           if (retryCount < 2) {
+             // Retry after 2 seconds
+             setTimeout(() => saveToFirestore(retryCount + 1), 2000);
+           } else {
+             setError('Uploaded file saved, but we could not save details. Please retry later.');
+           }
+         }
+       };
 
-      // Start the save process
-      saveToFirestore();
-    } catch (err) {
-      console.error('Upload error:', err);
-      setError(err?.message || 'Failed to upload file. Please try again.');
-    } finally {
+       // Start the save process
+       saveToFirestore();
+         } catch (err) {
+       setError(err?.message || 'Failed to upload file. Please try again.');
+     } finally {
       setIsUploading(false);
     }
   }
@@ -252,13 +232,12 @@ function AiResumeParserPage({ user }) {
       } else {
         throw new Error(result.data.error || 'Unknown error from Firebase Function');
       }
-    } catch (error) {
-      console.error('Error calling Firebase Function:', error);
-      setChatMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: 'Sorry, I encountered an error while processing your request. Please try again.' }
-      ]);
-    } finally {
+         } catch (error) {
+       setChatMessages((prev) => [
+         ...prev,
+         { role: 'assistant', content: 'Sorry, I encountered an error while processing your request. Please try again.' }
+       ]);
+     } finally {
       setIsChatLoading(false);
     }
   };
@@ -336,64 +315,58 @@ function AiResumeParserPage({ user }) {
 
                      <Divider sx={{ my: 2 }} />
 
-           {/* PDF Preview Section */}
-           <Box sx={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-             {uploadedUrl && isPdf ? (
-               <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.default' }}>
-                 <Typography variant="body2" sx={{ mb: 2, fontWeight: 500 }}>PDF Preview:</Typography>
-                 {!pdfBlobUrl ? (
-                   <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                     <CircularProgress size={24} />
-                     <Typography variant="body2" sx={{ ml: 1 }}>Preparing PDF...</Typography>
-                   </Box>
-                 ) : pdfError ? (
-                   <Alert severity="warning" sx={{ mt: 1 }}>{pdfError}</Alert>
-                 ) : (
-                   <>
-                     <Document
-                       file={pdfBlobUrl}
-                       onLoadSuccess={({ numPages: n }) => {
-                         console.log('PDF loaded successfully:', n, 'pages');
-                         setNumPages(n);
-                         setPdfError('');
-                       }}
-                       onLoadError={(error) => {
-                         console.error('PDF load error:', error);
-                         setPdfError('Failed to render PDF preview. You can still download and view the file.');
-                       }}
-                       loading={
-                         <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                           <CircularProgress size={24} />
-                           <Typography variant="body2" sx={{ ml: 1 }}>Loading PDF...</Typography>
+                     {/* PDF Viewer Section */}
+                     {uploadedUrl && isPdf && (
+                       <Box sx={{ mb: 2 }}>
+                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, pb: 1, borderBottom: 1, borderColor: 'divider' }}>
+                           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>PDF Preview</Typography>
+                                                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                href={uploadedUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                sx={{ minWidth: 'auto', px: 1 }}
+                              >
+                                Open in New Tab
+                              </Button>
+                            </Box>
                          </Box>
-                       }
-                     >
-                       <Page 
-                         pageNumber={1} 
-                         width={400} 
-                         renderTextLayer={false} 
-                         renderAnnotationLayer={false}
-                         onLoadSuccess={() => console.log('Page 1 loaded successfully')}
-                         onLoadError={(error) => console.error('Page load error:', error)}
-                       />
-                     </Document>
-                     {numPages && numPages > 1 ? (
-                       <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                         Showing page 1 of {numPages}
-                       </Typography>
-                     ) : null}
-                   </>
-                 )}
-               </Paper>
-             ) : uploadedUrl && !isPdf ? (
-               <Alert severity="info">Preview available for PDF only. Use the link above to view the uploaded file.</Alert>
-             ) : (
-               <Box sx={{ textAlign: 'center', py: 8, color: 'text.secondary' }}>
-                 <Typography variant="body1" sx={{ mb: 1 }}>📄 Upload a resume to get started</Typography>
-                 <Typography variant="body2">Supported formats: PDF, DOC, DOCX</Typography>
-               </Box>
-             )}
-           </Box>
+                         
+                         <Box sx={{ display: 'flex', justifyContent: 'center', minHeight: '300px', border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}>
+                           {!pdfBlobUrl ? (
+                             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 4 }}>
+                               <CircularProgress size={24} />
+                               <Typography variant="body2" sx={{ mt: 1 }}>Loading PDF...</Typography>
+                             </Box>
+                           ) : pdfError ? (
+                             <Alert severity="warning" sx={{ mt: 1 }}>{pdfError}</Alert>
+                           ) : (
+                                                           <iframe
+                                src={pdfBlobUrl}
+                                width="100%"
+                                height="400px"
+                                style={{
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                                }}
+                                title="PDF Preview"
+                                onLoad={() => {
+                                  // PDF loaded successfully
+                                  setPdfError('');
+                                }}
+                                onError={() => {
+                                  setPdfError('Failed to load PDF. You can still download and view the file.');
+                                }}
+                              />
+                           )}
+                         </Box>
+                       </Box>
+                     )}
+
+                     
                  </Paper>
 
          {/* Resizable Divider */}
@@ -431,35 +404,35 @@ function AiResumeParserPage({ user }) {
            }}
          />
 
-         {/* Right: Chat Interface */}
-         <Paper 
-           elevation={0} 
-           sx={{ 
-             bgcolor: 'background.paper', 
-             border: 1, 
-             borderColor: 'divider', 
-             p: 2, 
-             minHeight: '100%', 
-             display: 'flex', 
-             flexDirection: 'column',
-             flex: 1,
-             minWidth: '300px'
-           }}
-         >
+                   {/* Right: PDF Viewer + Chat Interface */}
+          <Box sx={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            flex: 1, 
+            minWidth: '300px',
+            gap: 2
+          }}>
+
+
+            {/* Chat Interface */}
+            <Paper 
+              elevation={0} 
+              sx={{ 
+                bgcolor: 'background.paper', 
+                border: 1, 
+                borderColor: 'divider', 
+                p: 2, 
+                flex: 1,
+                minHeight: '40%',
+                display: 'flex', 
+                flexDirection: 'column'
+              }}
+            >
            {/* Chat Header */}
            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, pb: 2, borderBottom: 1, borderColor: 'divider' }}>
              <Typography variant="h6" sx={{ fontWeight: 600 }}>AI Chat Assistant</Typography>
              <Box sx={{ display: 'flex', gap: 1 }}>
-               <Button
-                 size="small"
-                 variant="outlined"
-                 onClick={() => setLeftPanelWidth(50)}
-                 sx={{ minWidth: 'auto', px: 1 }}
-                 title="Reset layout to 50/50"
-               >
-                 Reset Layout
-               </Button>
-               <Button
+                      <Button
                  size="small"
                  variant="outlined"
                  onClick={() => {
@@ -469,7 +442,7 @@ function AiResumeParserPage({ user }) {
                  sx={{ minWidth: 'auto', px: 1 }}
                  title="Test width change"
                >
-                 Test: {leftPanelWidth}%
+                 Layout: <VerticalSplitIcon />
                </Button>
                {chatMessages.length > 0 && (
                  <Button
@@ -650,8 +623,9 @@ function AiResumeParserPage({ user }) {
                  {isChatLoading ? <CircularProgress size={20} /> : '→'}
                </Button>
              </Box>
-           </Box>
-         </Paper>
+                       </Box>
+          </Paper>
+        </Box>
       </Box>
     </Box>
   );

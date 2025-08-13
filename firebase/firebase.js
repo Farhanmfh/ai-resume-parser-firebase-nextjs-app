@@ -2,6 +2,7 @@ import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { initializeFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -25,5 +26,11 @@ const db = initializeFirestore(app, {
 });
 
 const storage = getStorage(app);
+const functions = getFunctions(app);
 
-export { app, auth, db, storage };
+// Connect to local emulator in development
+if (process.env.NODE_ENV === 'development') {
+  connectFunctionsEmulator(functions, '127.0.0.1', 5001);
+}
+
+export { app, auth, db, storage, functions };

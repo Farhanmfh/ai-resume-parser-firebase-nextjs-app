@@ -3,9 +3,10 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useTheme } from '@mui/material/styles';
 import withAuth from '@/firebase/withAuth';
-import { db, storage } from '@/firebase/firebase';
+import { db, storage, functions } from '@/firebase/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, getBlob } from 'firebase/storage';
+import { httpsCallable } from 'firebase/functions';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
@@ -21,6 +22,7 @@ import {
   Alert,
   CircularProgress,
 } from '@mui/material';
+import { useState as useReactState } from 'react';
 
 function AiResumeParserPage({ user }) {
   const [file, setFile] = useState(null);
@@ -38,6 +40,13 @@ function AiResumeParserPage({ user }) {
   const [pdfBlobUrl, setPdfBlobUrl] = useState('');
   const pdfBlobUrlRef = useRef('');
   const chatEndRef = useRef(null);
+  
+  // Resizable layout state
+  const [leftPanelWidth, setLeftPanelWidth] = useState(50); // percentage
+  const [isResizing, setIsResizing] = useState(false);
+  const isResizingRef = useRef(false); // Use ref to avoid state update delays
+  
+
   const isPdf = useMemo(
     () => (file?.type === 'application/pdf') || (uploadedUrl?.toLowerCase()?.includes('.pdf')),
     [file, uploadedUrl]
@@ -184,16 +193,46 @@ function AiResumeParserPage({ user }) {
     }
   }
 
+    // Resize handlers
+  const handleMouseDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    isResizingRef.current = true;
+    setIsResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    
+    const handleMouseMove = (e) => {
+      if (!isResizingRef.current) return;
+      
+      const container = document.querySelector('.resizable-container');
+      if (!container) return;
+      
+      const rect = container.getBoundingClientRect();
+      const newLeftWidth = ((e.clientX - rect.left) / rect.width) * 100;
+      
+      // Limit the width between 20% and 80%
+      if (newLeftWidth >= 20 && newLeftWidth <= 80) {
+        setLeftPanelWidth(newLeftWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      isResizingRef.current = false;
+      setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
   const ask = async (text) => {
     if (!text?.trim()) return;
-    
-    if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
-      setChatMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: 'Error: Gemini API key not configured. Please check your environment variables.' }
-      ]);
-      return;
-    }
     
     const userMessage = text.trim();
     setChatMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
@@ -201,46 +240,20 @@ function AiResumeParserPage({ user }) {
     setIsChatLoading(true);
 
     try {
-      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': process.env.NEXT_PUBLIC_GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: userMessage
-                }
-              ]
-            }
-          ]
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
+      // Call Firebase Function instead of direct API call
+      const geminiChat = httpsCallable(functions, 'geminiChat');
+      const result = await geminiChat({ message: userMessage });
       
-             if (data.candidates && data.candidates[0] && data.candidates[0].content) {
-         const aiResponse = data.candidates[0].content.parts[0].text;
-         if (aiResponse && aiResponse.trim()) {
-           setChatMessages((prev) => [
-             ...prev,
-             { role: 'assistant', content: aiResponse }
-           ]);
-         } else {
-           throw new Error('Empty response from Gemini API');
-         }
-       } else {
-         throw new Error('Invalid response format from Gemini API');
-       }
+      if (result.data.success) {
+        setChatMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: result.data.response }
+        ]);
+      } else {
+        throw new Error(result.data.error || 'Unknown error from Firebase Function');
+      }
     } catch (error) {
-      console.error('Error calling Gemini API:', error);
+      console.error('Error calling Firebase Function:', error);
       setChatMessages((prev) => [
         ...prev,
         { role: 'assistant', content: 'Sorry, I encountered an error while processing your request. Please try again.' }
@@ -258,12 +271,35 @@ function AiResumeParserPage({ user }) {
       display: 'flex',
       flexDirection: 'column',
     }}>
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 380px' }, gap: 2, p: 2 }}>
-        {/* Left: Chat + Upload */}
-        <Paper elevation={0} sx={{ bgcolor: 'background.paper', border: 1, borderColor: 'divider', p: 2, minHeight: 'calc(100vh - 96px)', display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Upload Resume</Typography>
-            <Typography variant="caption" color="text.secondary">PDF, DOC, DOCX. Max 5MB.</Typography>
+             <Box 
+         className="resizable-container"
+         sx={{ 
+           display: 'flex', 
+           gap: 0, 
+           p: 2, 
+           height: 'calc(100vh - 96px)',
+           position: 'relative'
+         }}
+       >
+         {/* Left: Upload + PDF Preview */}
+         <Paper 
+           elevation={0} 
+           sx={{ 
+             bgcolor: 'background.paper', 
+             border: 1, 
+             borderColor: 'divider', 
+             p: 2, 
+             minHeight: '100%', 
+             display: 'flex', 
+             flexDirection: 'column',
+             width: `${leftPanelWidth}%`,
+             minWidth: '300px',
+             maxWidth: '80%'
+           }}
+         >
+           <Box sx={{ mb: 2 }}>
+             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Upload Resume</Typography>
+             <Typography variant="caption" color="text.secondary">PDF, DOC, DOCX. Max 5MB.</Typography>
 
             {error ? (
               <Alert severity="error" sx={{ my: 2 }}>{error}</Alert>
@@ -298,81 +334,182 @@ function AiResumeParserPage({ user }) {
             ) : null}
           </Box>
 
-          <Divider sx={{ my: 2 }} />
+                     <Divider sx={{ my: 2 }} />
 
-          <Box sx={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {uploadedUrl && isPdf ? (
-              <Paper variant="outlined" sx={{ p: 1, bgcolor: 'background.default' }}>
-                <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>PDF Preview:</Typography>
-                {!pdfBlobUrl ? (
-                  <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                    <CircularProgress size={24} />
-                    <Typography variant="body2" sx={{ ml: 1 }}>Preparing PDF...</Typography>
-                  </Box>
-                ) : pdfError ? (
-                  <Alert severity="warning" sx={{ mt: 1 }}>{pdfError}</Alert>
-                ) : (
-                  <>
-                    <Document
-                      file={pdfBlobUrl}
-                      onLoadSuccess={({ numPages: n }) => {
-                        console.log('PDF loaded successfully:', n, 'pages');
-                        setNumPages(n);
-                        setPdfError('');
-                      }}
-                      onLoadError={(error) => {
-                        console.error('PDF load error:', error);
-                        setPdfError('Failed to render PDF preview. You can still download and view the file.');
-                      }}
-                      loading={
-                        <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                          <CircularProgress size={24} />
-                          <Typography variant="body2" sx={{ ml: 1 }}>Loading PDF...</Typography>
-                        </Box>
-                      }
-                    >
-                      <Page 
-                        pageNumber={1} 
-                        width={500} 
-                        renderTextLayer={false} 
-                        renderAnnotationLayer={false}
-                        onLoadSuccess={() => console.log('Page 1 loaded successfully')}
-                        onLoadError={(error) => console.error('Page load error:', error)}
-                      />
-                    </Document>
-                    {numPages && numPages > 1 ? (
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                        Showing page 1 of {numPages}
-                      </Typography>
-                    ) : null}
-                  </>
-                )}
-              </Paper>
-            ) : uploadedUrl && !isPdf ? (
-              <Alert severity="info">Preview available for PDF only. Use the link above to view the uploaded file.</Alert>
-            ) : null}
-            {chatMessages.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
-                Start a conversation by asking any question or pick a suggestion below.
-              </Typography>
-                         ) : chatMessages.map((m, idx) => (
+           {/* PDF Preview Section */}
+           <Box sx={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+             {uploadedUrl && isPdf ? (
+               <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.default' }}>
+                 <Typography variant="body2" sx={{ mb: 2, fontWeight: 500 }}>PDF Preview:</Typography>
+                 {!pdfBlobUrl ? (
+                   <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                     <CircularProgress size={24} />
+                     <Typography variant="body2" sx={{ ml: 1 }}>Preparing PDF...</Typography>
+                   </Box>
+                 ) : pdfError ? (
+                   <Alert severity="warning" sx={{ mt: 1 }}>{pdfError}</Alert>
+                 ) : (
+                   <>
+                     <Document
+                       file={pdfBlobUrl}
+                       onLoadSuccess={({ numPages: n }) => {
+                         console.log('PDF loaded successfully:', n, 'pages');
+                         setNumPages(n);
+                         setPdfError('');
+                       }}
+                       onLoadError={(error) => {
+                         console.error('PDF load error:', error);
+                         setPdfError('Failed to render PDF preview. You can still download and view the file.');
+                       }}
+                       loading={
+                         <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                           <CircularProgress size={24} />
+                           <Typography variant="body2" sx={{ ml: 1 }}>Loading PDF...</Typography>
+                         </Box>
+                       }
+                     >
+                       <Page 
+                         pageNumber={1} 
+                         width={400} 
+                         renderTextLayer={false} 
+                         renderAnnotationLayer={false}
+                         onLoadSuccess={() => console.log('Page 1 loaded successfully')}
+                         onLoadError={(error) => console.error('Page load error:', error)}
+                       />
+                     </Document>
+                     {numPages && numPages > 1 ? (
+                       <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                         Showing page 1 of {numPages}
+                       </Typography>
+                     ) : null}
+                   </>
+                 )}
+               </Paper>
+             ) : uploadedUrl && !isPdf ? (
+               <Alert severity="info">Preview available for PDF only. Use the link above to view the uploaded file.</Alert>
+             ) : (
+               <Box sx={{ textAlign: 'center', py: 8, color: 'text.secondary' }}>
+                 <Typography variant="body1" sx={{ mb: 1 }}>📄 Upload a resume to get started</Typography>
+                 <Typography variant="body2">Supported formats: PDF, DOC, DOCX</Typography>
+               </Box>
+             )}
+           </Box>
+                 </Paper>
+
+         {/* Resizable Divider */}
+         <Box
+           onMouseDown={handleMouseDown}
+           onClick={(e) => e.stopPropagation()}
+           sx={{
+             width: '12px',
+             bgcolor: isResizing ? 'primary.main' : 'rgba(0,0,0,0.1)',
+             cursor: 'col-resize',
+             position: 'relative',
+             userSelect: 'none',
+             transition: 'background-color 0.1s',
+             border: '1px solid transparent',
+             '&:hover': {
+               bgcolor: 'action.hover',
+               borderColor: 'primary.main',
+             },
+             '&::after': {
+               content: '""',
+               position: 'absolute',
+               left: '50%',
+               top: '50%',
+               transform: 'translate(-50%, -50%)',
+               width: isResizing ? '4px' : '2px',
+               height: '60px',
+               bgcolor: isResizing ? 'white' : 'divider',
+               borderRadius: '1px',
+               transition: 'all 0.1s',
+             },
+             '&:hover::after': {
+               bgcolor: 'primary.main',
+               width: '3px',
+             }
+           }}
+         />
+
+         {/* Right: Chat Interface */}
+         <Paper 
+           elevation={0} 
+           sx={{ 
+             bgcolor: 'background.paper', 
+             border: 1, 
+             borderColor: 'divider', 
+             p: 2, 
+             minHeight: '100%', 
+             display: 'flex', 
+             flexDirection: 'column',
+             flex: 1,
+             minWidth: '300px'
+           }}
+         >
+           {/* Chat Header */}
+           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, pb: 2, borderBottom: 1, borderColor: 'divider' }}>
+             <Typography variant="h6" sx={{ fontWeight: 600 }}>AI Chat Assistant</Typography>
+             <Box sx={{ display: 'flex', gap: 1 }}>
+               <Button
+                 size="small"
+                 variant="outlined"
+                 onClick={() => setLeftPanelWidth(50)}
+                 sx={{ minWidth: 'auto', px: 1 }}
+                 title="Reset layout to 50/50"
+               >
+                 Reset Layout
+               </Button>
+               <Button
+                 size="small"
+                 variant="outlined"
+                 onClick={() => {
+                   const newWidth = leftPanelWidth === 50 ? 70 : 50;
+                   setLeftPanelWidth(newWidth);
+                 }}
+                 sx={{ minWidth: 'auto', px: 1 }}
+                 title="Test width change"
+               >
+                 Test: {leftPanelWidth}%
+               </Button>
+               {chatMessages.length > 0 && (
+                 <Button
+                   size="small"
+                   variant="outlined"
+                   onClick={() => setChatMessages([])}
+                   sx={{ minWidth: 'auto', px: 1 }}
+                 >
+                   Clear Chat
+                 </Button>
+               )}
+             </Box>
+           </Box>
+
+           {/* Chat Messages */}
+           <Box sx={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, mb: 2 }}>
+             {chatMessages.length === 0 ? (
+               <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                 <Typography variant="body1" sx={{ mb: 2 }}>👋 Welcome! I'm your AI assistant.</Typography>
+                 <Typography variant="body2">Ask me anything or pick a suggestion below to get started.</Typography>
+               </Box>
+             ) : chatMessages.map((m, idx) => (
                <Box key={idx} sx={{
                  alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                 bgcolor: m.role === 'user' ? 'primary.dark' : 'background.default',
+                 bgcolor: m.role === 'user' ? 'primary.main' : 'background.default',
                  color: m.role === 'user' ? 'white' : 'text.primary',
-                 px: 2,
-                 py: 1.25,
-                 borderRadius: 2,
+                 px: 3,
+                 py: 2,
+                 borderRadius: 3,
                  maxWidth: '85%',
                  border: m.role === 'assistant' ? 1 : 0,
-                 borderColor: 'divider'
+                 borderColor: 'divider',
+                 boxShadow: m.role === 'user' ? 1 : 0
                }}>
                  {m.role === 'user' ? (
-                   <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>
+                   <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>
                  ) : (
                    <Box sx={{ 
                      fontSize: '0.875rem',
-                     lineHeight: 1.5,
+                     lineHeight: 1.6,
                      '& h1, & h2, & h3, & h4, & h5, & h6': { 
                        mt: 0, mb: 1, color: 'text.primary',
                        fontWeight: 600
@@ -434,78 +571,87 @@ function AiResumeParserPage({ user }) {
                  )}
                </Box>
              ))}
-            
-            {isChatLoading && (
-              <Box sx={{
-                alignSelf: 'flex-start',
-                bgcolor: 'background.default',
-                px: 2,
-                py: 1.25,
-                borderRadius: 2,
-                border: 1,
-                borderColor: 'divider',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1
-              }}>
-                <CircularProgress size={16} />
-                <Typography variant="body2" color="text.secondary">AI is thinking...</Typography>
-              </Box>
-            )}
-            <div ref={chatEndRef} />
-          </Box>
-        </Paper>
+             
+             {isChatLoading && (
+               <Box sx={{
+                 alignSelf: 'flex-start',
+                 bgcolor: 'background.default',
+                 px: 3,
+                 py: 2,
+                 borderRadius: 3,
+                 border: 1,
+                 borderColor: 'divider',
+                 display: 'flex',
+                 alignItems: 'center',
+                 gap: 1
+               }}>
+                 <CircularProgress size={16} />
+                 <Typography variant="body2" color="text.secondary">AI is thinking...</Typography>
+               </Box>
+             )}
+             <div ref={chatEndRef} />
+           </Box>
 
-        {/* Right: Q&A Panel */}
-        <Paper elevation={0} sx={{ bgcolor: 'background.paper', border: 1, borderColor: 'divider', p: 2, minHeight: 'calc(100vh - 96px)' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Questions</Typography>
-            {chatMessages.length > 0 && (
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setChatMessages([])}
-                sx={{ minWidth: 'auto', px: 1 }}
-              >
-                Clear Chat
-              </Button>
-            )}
-          </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Ask any question or pick a suggestion below to start chatting with AI.
-          </Typography>
+           {/* Suggested Questions */}
+           {chatMessages.length === 0 && (
+             <Box sx={{ mb: 2 }}>
+               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Try asking:</Typography>
+               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                 {suggestedQuestions.map((q) => (
+                   <Chip 
+                     key={q} 
+                     label={q} 
+                     onClick={() => ask(q)}
+                     variant="outlined"
+                     size="small"
+                     sx={{ cursor: 'pointer' }}
+                   />
+                 ))}
+               </Box>
+             </Box>
+           )}
 
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
-            {suggestedQuestions.map((q) => (
-              <Chip key={q} label={q} onClick={() => ask(q)} />
-            ))}
-          </Box>
-
-          <Divider sx={{ my: 2 }} />
-
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <TextField
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  if (question.trim() && !isChatLoading) {
-                    ask(question);
-                  }
-                }
-              }}
-              placeholder="Ask anything... (Press Enter to send)"
-              multiline
-              minRows={2}
-              fullWidth
-              sx={{ borderRadius: 1 }}
-            />
-            <Button variant="contained" onClick={() => ask(question)} disabled={!question.trim() || isChatLoading} sx={{ alignSelf: 'flex-end' }}>
-              {isChatLoading ? <CircularProgress size={20} /> : 'Ask'}
-            </Button>
-          </Box>
-        </Paper>
+           {/* Input Area */}
+           <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }}>
+             <Box sx={{ display: 'flex', gap: 1 }}>
+               <TextField
+                 value={question}
+                 onChange={(e) => setQuestion(e.target.value)}
+                 onKeyPress={(e) => {
+                   if (e.key === 'Enter' && !e.shiftKey) {
+                     e.preventDefault();
+                     if (question.trim() && !isChatLoading) {
+                       ask(question);
+                     }
+                   }
+                 }}
+                 placeholder="Ask anything... (Press Enter to send)"
+                 multiline
+                 minRows={1}
+                 maxRows={4}
+                 fullWidth
+                 sx={{ 
+                   borderRadius: 2,
+                   '& .MuiOutlinedInput-root': {
+                     borderRadius: 2
+                   }
+                 }}
+               />
+               <Button 
+                 variant="contained" 
+                 onClick={() => ask(question)} 
+                 disabled={!question.trim() || isChatLoading} 
+                 sx={{ 
+                   borderRadius: 2,
+                   minWidth: '60px',
+                   height: '40px'
+                 }}
+               >
+                 {isChatLoading ? <CircularProgress size={20} /> : '→'}
+               </Button>
+             </Box>
+           </Box>
+         </Paper>
       </Box>
     </Box>
   );

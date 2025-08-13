@@ -9,6 +9,7 @@ import { ref, uploadBytes, getDownloadURL, getBlob } from 'firebase/storage';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
+import ReactMarkdown from 'react-markdown';
 import {
   Box,
   Paper,
@@ -30,15 +31,24 @@ function AiResumeParserPage({ user }) {
 
   const [question, setQuestion] = useState('');
   const [chatMessages, setChatMessages] = useState([]); // {role: 'user'|'assistant', content}
+  const [isChatLoading, setIsChatLoading] = useState(false);
   const theme = useTheme();
   const [numPages, setNumPages] = useState(null);
   const [pdfError, setPdfError] = useState('');
   const [pdfBlobUrl, setPdfBlobUrl] = useState('');
   const pdfBlobUrlRef = useRef('');
+  const chatEndRef = useRef(null);
   const isPdf = useMemo(
     () => (file?.type === 'application/pdf') || (uploadedUrl?.toLowerCase()?.includes('.pdf')),
     [file, uploadedUrl]
   );
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages]);
 
   // Fetch PDF as blob to avoid CORS issues
   useEffect(() => {
@@ -78,20 +88,13 @@ function AiResumeParserPage({ user }) {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   ];
 
-  const suggestedQuestions = useMemo(() => {
-    const base = [
-      'What are the key skills in this resume?',
-      'How well does this resume fit a Frontend Developer role?',
-      'Summarize this candidate\'s experience in 3 bullet points.',
-    ];
-    if (!file) return base;
-    const name = (file?.name || '').replace(/\.[^.]+$/, '');
-    return [
-      `Give a quick profile summary for candidate: ${name}`,
-      'List notable achievements and impact metrics.',
-      'Identify gaps relative to a Senior Engineer JD.',
-    ];
-  }, [file]);
+  const suggestedQuestions = useMemo(() => [
+    'Explain how AI works in simple terms',
+    'What are the benefits of machine learning?',
+    'How can technology improve productivity?',
+    'What is the future of artificial intelligence?',
+    'Explain blockchain technology briefly',
+  ], []);
 
   const validate = () => {
     if (!file) return 'Please choose a resume file (PDF or DOC/DOCX).';
@@ -181,19 +184,70 @@ function AiResumeParserPage({ user }) {
     }
   }
 
-  const ask = (text) => {
-    if (!uploadedUrl) {
-      setError('Upload a resume first to ask questions.');
+  const ask = async (text) => {
+    if (!text?.trim()) return;
+    
+    if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'Error: Gemini API key not configured. Please check your environment variables.' }
+      ]);
       return;
     }
-    if (!text?.trim()) return;
-    setChatMessages((prev) => [...prev, { role: 'user', content: text.trim() }]);
+    
+    const userMessage = text.trim();
+    setChatMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
     setQuestion('');
-    // Placeholder assistant response. Hook up to your AI API later.
-    setChatMessages((prev) => [
-      ...prev,
-      { role: 'assistant', content: 'AI analysis coming soon. Connect /api/check-fit to generate answers.' },
-    ]);
+    setIsChatLoading(true);
+
+    try {
+      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': process.env.NEXT_PUBLIC_GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: userMessage
+                }
+              ]
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+             if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+         const aiResponse = data.candidates[0].content.parts[0].text;
+         if (aiResponse && aiResponse.trim()) {
+           setChatMessages((prev) => [
+             ...prev,
+             { role: 'assistant', content: aiResponse }
+           ]);
+         } else {
+           throw new Error('Empty response from Gemini API');
+         }
+       } else {
+         throw new Error('Invalid response format from Gemini API');
+       }
+    } catch (error) {
+      console.error('Error calling Gemini API:', error);
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'Sorry, I encountered an error while processing your request. Please try again.' }
+      ]);
+    } finally {
+      setIsChatLoading(false);
+    }
   };
 
   return (
@@ -299,29 +353,126 @@ function AiResumeParserPage({ user }) {
             ) : null}
             {chatMessages.length === 0 ? (
               <Typography variant="body2" color="text.secondary">
-                Your conversation will appear here after you upload and start asking questions.
+                Start a conversation by asking any question or pick a suggestion below.
               </Typography>
-            ) : chatMessages.map((m, idx) => (
-              <Box key={idx} sx={{
-                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                bgcolor: m.role === 'user' ? 'primary.dark' : 'background.default',
-                color: 'text.primary',
+                         ) : chatMessages.map((m, idx) => (
+               <Box key={idx} sx={{
+                 alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                 bgcolor: m.role === 'user' ? 'primary.dark' : 'background.default',
+                 color: m.role === 'user' ? 'white' : 'text.primary',
+                 px: 2,
+                 py: 1.25,
+                 borderRadius: 2,
+                 maxWidth: '85%',
+                 border: m.role === 'assistant' ? 1 : 0,
+                 borderColor: 'divider'
+               }}>
+                 {m.role === 'user' ? (
+                   <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>
+                 ) : (
+                   <Box sx={{ 
+                     fontSize: '0.875rem',
+                     lineHeight: 1.5,
+                     '& h1, & h2, & h3, & h4, & h5, & h6': { 
+                       mt: 0, mb: 1, color: 'text.primary',
+                       fontWeight: 600
+                     },
+                     '& h1': { fontSize: '1.25rem' },
+                     '& h2': { fontSize: '1.125rem' },
+                     '& h3, & h4, & h5, & h6': { fontSize: '1rem' },
+                     '& p': { 
+                       mt: 0, mb: 1, '&:last-child': { mb: 0 } 
+                     },
+                     '& ul, & ol': { 
+                       mt: 0, mb: 1, pl: 2 
+                     },
+                     '& li': { 
+                       mb: 0.5 
+                     },
+                     '& strong, & b': { 
+                       fontWeight: 600 
+                     },
+                     '& em, & i': { 
+                       fontStyle: 'italic' 
+                     },
+                     '& code': { 
+                       bgcolor: 'action.hover', 
+                       px: 0.5, 
+                       py: 0.25, 
+                       borderRadius: 0.5,
+                       fontFamily: 'monospace',
+                       fontSize: '0.875em'
+                     },
+                     '& pre': { 
+                       bgcolor: 'action.hover', 
+                       p: 1, 
+                       borderRadius: 1,
+                       overflow: 'auto',
+                       '& code': { 
+                         bgcolor: 'transparent', 
+                         p: 0 
+                       }
+                     },
+                     '& blockquote': {
+                       borderLeft: 3,
+                       borderColor: 'primary.main',
+                       pl: 2,
+                       ml: 0,
+                       my: 1,
+                       fontStyle: 'italic',
+                       color: 'text.secondary'
+                     },
+                     '& hr': {
+                       border: 'none',
+                       borderTop: 1,
+                       borderColor: 'divider',
+                       my: 1
+                     }
+                   }}>
+                     <ReactMarkdown>{m.content}</ReactMarkdown>
+                   </Box>
+                 )}
+               </Box>
+             ))}
+            
+            {isChatLoading && (
+              <Box sx={{
+                alignSelf: 'flex-start',
+                bgcolor: 'background.default',
                 px: 2,
                 py: 1.25,
                 borderRadius: 2,
-                maxWidth: '85%'
+                border: 1,
+                borderColor: 'divider',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1
               }}>
-                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>
+                <CircularProgress size={16} />
+                <Typography variant="body2" color="text.secondary">AI is thinking...</Typography>
               </Box>
-            ))}
+            )}
+            <div ref={chatEndRef} />
           </Box>
         </Paper>
 
         {/* Right: Q&A Panel */}
         <Paper elevation={0} sx={{ bgcolor: 'background.paper', border: 1, borderColor: 'divider', p: 2, minHeight: 'calc(100vh - 96px)' }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Questions</Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Questions</Typography>
+            {chatMessages.length > 0 && (
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => setChatMessages([])}
+                sx={{ minWidth: 'auto', px: 1 }}
+              >
+                Clear Chat
+              </Button>
+            )}
+          </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Upload a resume, then ask questions or pick a suggestion.
+            Ask any question or pick a suggestion below to start chatting with AI.
           </Typography>
 
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
@@ -336,14 +487,22 @@ function AiResumeParserPage({ user }) {
             <TextField
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Ask something about the resume..."
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (question.trim() && !isChatLoading) {
+                    ask(question);
+                  }
+                }
+              }}
+              placeholder="Ask anything... (Press Enter to send)"
               multiline
               minRows={2}
               fullWidth
               sx={{ borderRadius: 1 }}
             />
-            <Button variant="contained" onClick={() => ask(question)} disabled={!question.trim()} sx={{ alignSelf: 'flex-end' }}>
-              Ask
+            <Button variant="contained" onClick={() => ask(question)} disabled={!question.trim() || isChatLoading} sx={{ alignSelf: 'flex-end' }}>
+              {isChatLoading ? <CircularProgress size={20} /> : 'Ask'}
             </Button>
           </Box>
         </Paper>

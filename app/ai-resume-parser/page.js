@@ -128,12 +128,21 @@ function AiResumeParserPage({ user }) {
     setShowUploadModal(false);
   }, []);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive (but not on initial load)
   const currentMessages = activeTab === 0 ? generalChatMessages : resumeContextMessages;
+  const prevMessagesLengthRef = useRef(0);
+  
   useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    // Only auto-scroll if we actually have new messages (not on initial load)
+    if (currentMessages.length > prevMessagesLengthRef.current && chatEndRef.current) {
+      // Use a small delay to ensure the DOM has updated
+      setTimeout(() => {
+        if (chatEndRef.current) {
+          chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 100);
     }
+    prevMessagesLengthRef.current = currentMessages.length;
   }, [currentMessages]);
 
   // Fallback PDF text extraction method
@@ -746,6 +755,7 @@ ${jobRequirements.trim()}`;
                       boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
                     }}
                     title="PDF Preview"
+                    scrolling="no"
                     onLoad={() => {
                       // PDF loaded successfully
                       setPdfError('');

@@ -33,6 +33,21 @@ export default function RootLayout({ children }) {
             </div>
           </AuthContextProvider>
         </Providers>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              // Prevent scroll restoration on page refresh
+              if ('scrollRestoration' in history) {
+                history.scrollRestoration = 'manual';
+              }
+              
+              // Ensure page starts at top on refresh
+              window.addEventListener('load', function() {
+                window.scrollTo(0, 0);
+              });
+            `,
+          }}
+        />
       </body>
     </html>
   );

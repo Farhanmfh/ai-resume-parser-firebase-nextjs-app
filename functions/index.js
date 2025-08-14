@@ -28,10 +28,10 @@ exports.geminiChat = onCall(async (request) => {
       throw new Error('Message is required and must be a string');
     }
 
-    // Get API key from environment variables
+    // Get API key from environment variables (Firebase Functions v2)
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error('Gemini API key not configured');
+      throw new Error('Gemini API key not configured. Please set GEMINI_API_KEY environment variable in Firebase Functions.');
     }
 
     logger.info('Calling Gemini API', { message: message.substring(0, 100) });
@@ -108,7 +108,11 @@ exports.geminiChat = onCall(async (request) => {
       throw new Error('Invalid response format from Gemini API');
     }
   } catch (error) {
-    logger.error('Error in geminiChat function', { error: error.message });
+    logger.error('Error in geminiChat function', { 
+      error: error.message, 
+      stack: error.stack,
+      data: request.data 
+    });
     return { 
       success: false, 
       error: error.message || 'An unexpected error occurred' 
@@ -129,10 +133,10 @@ exports.analyzeResume = onCall(async (request) => {
       throw new Error('Job requirements are required and must be a string');
     }
 
-    // Get API key from environment variables
+    // Get API key from environment variables (Firebase Functions v2)
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error('Gemini API key not configured');
+      throw new Error('Gemini API key not configured. Please set GEMINI_API_KEY environment variable in Firebase Functions.');
     }
 
     logger.info('Analyzing resume against job requirements', { 
@@ -248,7 +252,11 @@ Make sure to use the exact formatting with **bold** headers and clear sections.`
       throw new Error('Invalid response format from Gemini API');
     }
   } catch (error) {
-    logger.error('Error in analyzeResume function', { error: error.message });
+    logger.error('Error in analyzeResume function', { 
+      error: error.message, 
+      stack: error.stack,
+      data: request.data 
+    });
     return { 
       success: false, 
       error: error.message || 'An unexpected error occurred' 

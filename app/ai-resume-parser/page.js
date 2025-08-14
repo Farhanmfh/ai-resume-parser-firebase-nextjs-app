@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
 import withAuth from '@/firebase/withAuth';
 import { db, storage, functions } from '@/firebase/firebase';
@@ -82,40 +82,71 @@ function AiResumeParserPage({ user }) {
     }
   }, [currentMessages]);
 
-  // Fetch PDF URL for display and extract text
-  useEffect(() => {
-    if (uploadedUrl && isPdf && storagePath) {
-      const fetchPdfUrl = async () => {
-        try {
-          // Use our utility helper to get the PDF URL
-          const result = await getFileBlobUrl(storagePath);
-          if (result && result.directUrl) {
-            setPdfBlobUrl(result.directUrl);
-            pdfBlobUrlRef.current = result.directUrl;
-            setPdfError(''); // Clear any previous errors
-            
-            // Extract text from PDF
-            await extractPdfTextHandler(result.directUrl);
-          } else {
-            setPdfError('Failed to load PDF. You can still download and view the file.');
-          }
-        } catch (error) {
-          console.error('PDF fetch error:', error);
-          setPdfError('Failed to load PDF. You can still download and view the file.');
-        }
-      };
+  // Fallback PDF text extraction method
+  const fallbackPdfExtraction = useCallback(async (pdfUrl) => {
+    try {
+      // Try to use the existing PDF.js instance if available
+      let pdfjsLib;
+      try {
+        pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      } catch (importError) {
+        console.error('Failed to import PDF.js for fallback:', importError);
+        return null;
+      }
       
-      fetchPdfUrl();
+      let pdf;
+      
+      // Try to use the File object first if available
+      if (file && file.type === 'application/pdf') {
+        try {
+          console.log('Fallback: Using File object for PDF extraction...');
+          const loadingTask = pdfjsLib.getDocument(URL.createObjectURL(file));
+          pdf = await loadingTask.promise;
+        } catch (fileError) {
+          console.error('Failed to load PDF from File object:', fileError);
+          // Fall back to URL
+          try {
+            const loadingTask = pdfjsLib.getDocument(pdfUrl);
+            pdf = await loadingTask.promise;
+          } catch (urlError) {
+            console.error('Failed to load PDF from URL:', urlError);
+            return null;
+          }
+        }
+      } else {
+        // Try to create a new document from the URL
+        try {
+          const loadingTask = pdfjsLib.getDocument(pdfUrl);
+          pdf = await loadingTask.promise;
+        } catch (pdfError) {
+          console.error('Failed to load PDF for fallback:', pdfError);
+          return null;
+        }
+      }
+      
+      let fullText = '';
+      try {
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map(item => item.str).join(' ');
+          fullText += pageText + '\n';
+        }
+      } catch (textError) {
+        console.error('Failed to extract text from PDF pages:', textError);
+        return null;
+      }
+      
+      return fullText.trim();
+    } catch (error) {
+      console.error('Fallback extraction failed:', error);
+      return null;
     }
-    
-    // No cleanup needed for iframe URLs
-    return () => {
-      // Cleanup not needed for iframe
-    };
-  }, [uploadedUrl, isPdf, storagePath]);
+  }, [file]);
 
   // Extract text from PDF using improved extraction utility
-  const extractPdfTextHandler = async (pdfUrl) => {
+  const extractPdfTextHandler = useCallback(async (pdfUrl) => {
     try {
       setIsExtractingText(true);
       setResumeText('');
@@ -198,70 +229,39 @@ function AiResumeParserPage({ user }) {
     } finally {
       setIsExtractingText(false);
     }
-  };
+  }, [file, setActiveTab, setShowTabSwitchNotice, setAnalysisResult, setAnalysisError, fallbackPdfExtraction]);
 
-  // Fallback PDF text extraction method
-  const fallbackPdfExtraction = async (pdfUrl) => {
-    try {
-      // Try to use the existing PDF.js instance if available
-      let pdfjsLib;
-      try {
-        pdfjsLib = await import('pdfjs-dist');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-      } catch (importError) {
-        console.error('Failed to import PDF.js for fallback:', importError);
-        return null;
-      }
-      
-      let pdf;
-      
-      // Try to use the File object first if available
-      if (file && file.type === 'application/pdf') {
+  // Fetch PDF URL for display and extract text
+  useEffect(() => {
+    if (uploadedUrl && isPdf && storagePath) {
+      const fetchPdfUrl = async () => {
         try {
-          console.log('Fallback: Using File object for PDF extraction...');
-          const loadingTask = pdfjsLib.getDocument(URL.createObjectURL(file));
-          pdf = await loadingTask.promise;
-        } catch (fileError) {
-          console.error('Failed to load PDF from File object:', fileError);
-          // Fall back to URL
-          try {
-            const loadingTask = pdfjsLib.getDocument(pdfUrl);
-            pdf = await loadingTask.promise;
-          } catch (urlError) {
-            console.error('Failed to load PDF from URL:', urlError);
-            return null;
+          // Use our utility helper to get the PDF URL
+          const result = await getFileBlobUrl(storagePath);
+          if (result && result.directUrl) {
+            setPdfBlobUrl(result.directUrl);
+            pdfBlobUrlRef.current = result.directUrl;
+            setPdfError(''); // Clear any previous errors
+            
+            // Extract text from PDF
+            await extractPdfTextHandler(result.directUrl);
+          } else {
+            setPdfError('Failed to load PDF. You can still download and view the file.');
           }
+        } catch (error) {
+          console.error('PDF fetch error:', error);
+          setPdfError('Failed to load PDF. You can still download and view the file.');
         }
-      } else {
-        // Try to create a new document from the URL
-        try {
-          const loadingTask = pdfjsLib.getDocument(pdfUrl);
-          pdf = await loadingTask.promise;
-        } catch (pdfError) {
-          console.error('Failed to load PDF for fallback:', pdfError);
-          return null;
-        }
-      }
+      };
       
-      let fullText = '';
-      try {
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items.map(item => item.str).join(' ');
-          fullText += pageText + '\n';
-        }
-      } catch (textError) {
-        console.error('Failed to extract text from PDF pages:', textError);
-        return null;
-      }
-      
-      return fullText.trim();
-    } catch (error) {
-      console.error('Fallback extraction failed:', error);
-      return null;
+      fetchPdfUrl();
     }
-  };
+    
+    // No cleanup needed for iframe URLs
+    return () => {
+      // Cleanup not needed for iframe
+    };
+  }, [uploadedUrl, isPdf, storagePath, extractPdfTextHandler]);
 
   const maxBytes = 5 * 1024 * 1024; // 5MB
   const allowedTypes = [

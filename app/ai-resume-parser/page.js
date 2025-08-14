@@ -3,12 +3,11 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
 import withAuth from '@/firebase/withAuth';
-import { db, storage, functions } from '@/firebase/firebase';
+import { db, storage } from '@/firebase/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getFileBlobUrl, cleanupBlobUrl } from '@/utils/storageHelper';
 import { extractPdfText, getFormattedTextForAI, getTextStatistics, extractResumeSections } from '@/utils/pdfTextExtractor';
-import { httpsCallable } from 'firebase/functions';
 import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
 import WorkIcon from '@mui/icons-material/Work';
 import AssessmentIcon from '@mui/icons-material/Assessment';
@@ -441,33 +440,66 @@ USER QUESTION: ${userMessage}
 
 Please answer the question based on the resume content above. If the question cannot be answered from the resume, say so. Provide specific insights from the resume when possible.`;
         
-        const geminiChat = httpsCallable(functions, 'geminiChat');
-        const result = await geminiChat({ message: prompt });
+        console.log('Calling Gemini API with prompt:', prompt.substring(0, 100) + '...');
+        const response = await fetch('https://geminichat-uzr46nuzga-uc.a.run.app', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ data: { message: prompt } }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('Gemini API response:', data);
+
+        // Handle both response formats: direct HTTP and httpsCallable wrapper
+        const responseData = data.result || data;
         
-        if (result.data.success) {
+        if (responseData.success) {
           setResumeContextMessages((prev) => [
             ...prev,
-            { role: 'assistant', content: result.data.response }
+            { role: 'assistant', content: responseData.response }
           ]);
         } else {
-          throw new Error(result.data.error || 'Unknown error from Firebase Function');
+          throw new Error(responseData.error || 'Unknown error from Firebase Function');
         }
       } else {
         // General chat
-        const geminiChat = httpsCallable(functions, 'geminiChat');
-        const result = await geminiChat({ message: userMessage });
+        console.log('Calling Gemini API with message:', userMessage);
+        const response = await fetch('https://geminichat-uzr46nuzga-uc.a.run.app', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ data: { message: userMessage } }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('Gemini API response:', data);
+
+        // Handle both response formats: direct HTTP and httpsCallable wrapper
+        const responseData = data.result || data;
         
-        if (result.data.success) {
+        if (responseData.success) {
           setGeneralChatMessages((prev) => [
             ...prev,
-            { role: 'assistant', content: result.data.response }
+            { role: 'assistant', content: responseData.response }
           ]);
         } else {
-          throw new Error(result.data.error || 'Unknown error from Firebase Function');
+          throw new Error(responseData.error || 'Unknown error from Firebase Function');
         }
       }
     } catch (error) {
-      const errorMessage = 'Sorry, I encountered an error while processing your request. Please try again.';
+      console.error('Chat error:', error);
+      const errorMessage = `Sorry, I encountered an error while processing your request: ${error.message}. Please try again.`;
       if (isResumeContext) {
         setResumeContextMessages((prev) => [...prev, { role: 'assistant', content: errorMessage }]);
       } else {
@@ -531,20 +563,46 @@ JOB REQUIREMENTS:
 ${jobRequirements.trim()}`;
       }
 
-      const analyzeResumeFunction = httpsCallable(functions, 'analyzeResume');
-      const result = await analyzeResumeFunction({ 
-        resumeText: analysisContext, 
-        jobRequirements: jobRequirements.trim() 
+      console.log('Calling Resume Analysis API with context length:', analysisContext.length);
+      const response = await fetch('https://analyzeresume-uzr46nuzga-uc.a.run.app', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          data: {
+            resumeText: analysisContext, 
+            jobRequirements: jobRequirements.trim() 
+          }
+        }),
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Resume Analysis API response:', data);
+
+      // Handle both response formats: direct HTTP and httpsCallable wrapper
+      const responseData = data.result || data;
       
-      if (result.data.success) {
-        setAnalysisResult(result.data.response);
+      if (responseData.success) {
+        setAnalysisResult(responseData.response);
       } else {
-        throw new Error(result.data.error || 'Unknown error from analysis function');
+        throw new Error(responseData.error || 'Unknown error from analysis function');
       }
     } catch (error) {
       console.error('Resume analysis error:', error);
-      setAnalysisError(error.message || 'Failed to analyze resume. Please try again.');
+      let errorMessage = 'Failed to analyze resume. Please try again.';
+      
+      if (error.message.includes('HTTP error! status:')) {
+        errorMessage = `Server error (${error.message.split('status: ')[1]}). Please try again later.`;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      setAnalysisError(errorMessage);
     } finally {
       setIsAnalyzing(false);
     }

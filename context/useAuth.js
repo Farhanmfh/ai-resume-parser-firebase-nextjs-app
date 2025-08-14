@@ -12,12 +12,6 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  const checkAndRedirectProfile = (userData) => {
-    if (userData && !isProfileComplete(userData)) {
-      router.push('/profile');
-    }
-  };
-
   const logout = async () => {
     try {
       await auth.signOut();
@@ -39,8 +33,7 @@ export function useAuth() {
     }
     setUser(userFromCookie);
 
-    // Check if profile is complete and redirect if necessary
-    checkAndRedirectProfile(userFromCookie);
+ 
 
     // Listen for token changes
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -50,8 +43,6 @@ export function useAuth() {
           setUserCookie(userData);
           setUser(userData);
 
-          // Check if profile is complete after login
-          checkAndRedirectProfile(userData);
         } catch (error) {
           console.error('Error updating user data:', error);
           removeUserCookie();

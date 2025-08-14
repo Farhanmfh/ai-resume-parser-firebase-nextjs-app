@@ -7,8 +7,11 @@ import { db, storage, functions } from '@/firebase/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getFileBlobUrl, cleanupBlobUrl } from '@/utils/storageHelper';
+import { extractPdfText, getFormattedTextForAI, getTextStatistics, extractResumeSections } from '@/utils/pdfTextExtractor';
 import { httpsCallable } from 'firebase/functions';
 import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
+import WorkIcon from '@mui/icons-material/Work';
+import AssessmentIcon from '@mui/icons-material/Assessment';
 
 import ReactMarkdown from 'react-markdown';
 import {
@@ -21,6 +24,11 @@ import {
   Chip,
   Alert,
   CircularProgress,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import { useState as useReactState } from 'react';
 
@@ -40,6 +48,21 @@ function AiResumeParserPage({ user }) {
   const pdfBlobUrlRef = useRef('');
   const chatEndRef = useRef(null);
   
+  // Chat tabs state
+  const [activeTab, setActiveTab] = useState(0); // 0: General Chat, 1: Resume Context Chat
+  const [generalChatMessages, setGeneralChatMessages] = useState([]); // General AI chat
+  const [resumeContextMessages, setResumeContextMessages] = useState([]); // Resume-specific chat
+  const [showTabSwitchNotice, setShowTabSwitchNotice] = useState(false);
+  
+  // Resume analysis state
+  const [resumeText, setResumeText] = useState('');
+  const [jobRequirements, setJobRequirements] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [analysisError, setAnalysisError] = useState('');
+  const [isExtractingText, setIsExtractingText] = useState(false);
+  const [extractedPdfData, setExtractedPdfData] = useState(null);
+  
   // Resizable layout state
   const [leftPanelWidth, setLeftPanelWidth] = useState(50); // percentage
   const [isResizing, setIsResizing] = useState(false);
@@ -52,13 +75,14 @@ function AiResumeParserPage({ user }) {
   );
 
   // Auto-scroll to bottom when new messages arrive
+  const currentMessages = activeTab === 0 ? generalChatMessages : resumeContextMessages;
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [chatMessages]);
+  }, [currentMessages]);
 
-  // Fetch PDF URL for display
+  // Fetch PDF URL for display and extract text
   useEffect(() => {
     if (uploadedUrl && isPdf && storagePath) {
       const fetchPdfUrl = async () => {
@@ -69,6 +93,9 @@ function AiResumeParserPage({ user }) {
             setPdfBlobUrl(result.directUrl);
             pdfBlobUrlRef.current = result.directUrl;
             setPdfError(''); // Clear any previous errors
+            
+            // Extract text from PDF
+            await extractPdfTextHandler(result.directUrl);
           } else {
             setPdfError('Failed to load PDF. You can still download and view the file.');
           }
@@ -87,7 +114,154 @@ function AiResumeParserPage({ user }) {
     };
   }, [uploadedUrl, isPdf, storagePath]);
 
+  // Extract text from PDF using improved extraction utility
+  const extractPdfTextHandler = async (pdfUrl) => {
+    try {
+      setIsExtractingText(true);
+      setResumeText('');
+      
+      let extractedData;
+      
+      // Try to use the File object directly if available (more reliable)
+      if (file && file.type === 'application/pdf') {
+        console.log('Using File object for PDF text extraction...', {
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type
+        });
+        extractedData = await extractPdfText(file);
+      } else {
+        // Fallback to URL-based extraction
+        console.log('Using URL for PDF text extraction...', { pdfUrl });
+        try {
+          extractedData = await extractPdfText(pdfUrl);
+        } catch (urlError) {
+          console.log('URL-based extraction failed, trying File object as fallback...');
+          // If URL extraction fails and we have a file, try using the file directly
+          if (file && file.type === 'application/pdf') {
+            console.log('Retrying with File object...');
+            extractedData = await extractPdfText(file);
+          } else {
+            throw urlError; // Re-throw if we don't have a file to fall back to
+          }
+        }
+      }
+      
+      // Get formatted text for AI context
+      const formattedText = getFormattedTextForAI(extractedData);
+      setResumeText(formattedText);
+      
+      // Store additional extracted data for potential future use
+      setExtractedPdfData(extractedData);
+      
+      // Auto-switch to Resume Context tab when text is successfully extracted
+      if (formattedText.trim()) {
+        setActiveTab(1);
+        setShowTabSwitchNotice(true);
+        // Hide the notice after 5 seconds
+        setTimeout(() => setShowTabSwitchNotice(false), 5000);
+        
+        // Also clear any previous analysis results when switching
+        setAnalysisResult(null);
+        setAnalysisError('');
+      }
+    } catch (error) {
+      console.error('PDF text extraction error:', error);
+      setResumeText(''); // Clear text if extraction fails
+      
+      // Provide more user-friendly error messages
+      let errorMessage = 'Failed to extract text from PDF. Analysis may not work properly.';
+      
+      if (error.message.includes('CORS restrictions')) {
+        errorMessage = 'PDF text extraction failed due to browser security restrictions. The file will still be displayed but text analysis may not work.';
+      } else if (error.message.includes('Invalid PDF')) {
+        errorMessage = 'The uploaded file appears to be corrupted or not a valid PDF. Please try uploading a different PDF file.';
+      } else if (error.message.includes('Password required')) {
+        errorMessage = 'This PDF is password-protected and cannot be processed. Please upload an unprotected PDF file.';
+      } else if (error.message.includes('Failed to fetch')) {
+        errorMessage = 'Unable to access the PDF file for text extraction. The file will still be displayed but text analysis may not work.';
+      }
+      
+      setAnalysisError(errorMessage);
+      
+      // Try fallback extraction method
+      try {
+        console.log('Attempting fallback PDF text extraction...');
+        const fallbackText = await fallbackPdfExtraction(pdfUrl);
+        if (fallbackText) {
+          setResumeText(fallbackText);
+          setAnalysisError('Basic text extraction succeeded, but some formatting may be lost.');
+        }
+      } catch (fallbackError) {
+        console.error('Fallback extraction also failed:', fallbackError);
+      }
+    } finally {
+      setIsExtractingText(false);
+    }
+  };
 
+  // Fallback PDF text extraction method
+  const fallbackPdfExtraction = async (pdfUrl) => {
+    try {
+      // Try to use the existing PDF.js instance if available
+      let pdfjsLib;
+      try {
+        pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      } catch (importError) {
+        console.error('Failed to import PDF.js for fallback:', importError);
+        return null;
+      }
+      
+      let pdf;
+      
+      // Try to use the File object first if available
+      if (file && file.type === 'application/pdf') {
+        try {
+          console.log('Fallback: Using File object for PDF extraction...');
+          const loadingTask = pdfjsLib.getDocument(URL.createObjectURL(file));
+          pdf = await loadingTask.promise;
+        } catch (fileError) {
+          console.error('Failed to load PDF from File object:', fileError);
+          // Fall back to URL
+          try {
+            const loadingTask = pdfjsLib.getDocument(pdfUrl);
+            pdf = await loadingTask.promise;
+          } catch (urlError) {
+            console.error('Failed to load PDF from URL:', urlError);
+            return null;
+          }
+        }
+      } else {
+        // Try to create a new document from the URL
+        try {
+          const loadingTask = pdfjsLib.getDocument(pdfUrl);
+          pdf = await loadingTask.promise;
+        } catch (pdfError) {
+          console.error('Failed to load PDF for fallback:', pdfError);
+          return null;
+        }
+      }
+      
+      let fullText = '';
+      try {
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map(item => item.str).join(' ');
+          fullText += pageText + '\n';
+        }
+      } catch (textError) {
+        console.error('Failed to extract text from PDF pages:', textError);
+        return null;
+      }
+      
+      return fullText.trim();
+    } catch (error) {
+      console.error('Fallback extraction failed:', error);
+      return null;
+    }
+  };
 
   const maxBytes = 5 * 1024 * 1024; // 5MB
   const allowedTypes = [
@@ -119,6 +293,13 @@ function AiResumeParserPage({ user }) {
     setError('');
     setPdfError('');
     setPdfBlobUrl('');
+    setResumeText(''); // Clear previous resume text
+    setAnalysisResult(null); // Clear previous analysis
+    setAnalysisError(''); // Clear previous analysis errors
+    setResumeContextMessages([]); // Clear resume context chat
+    setActiveTab(0); // Reset to General Chat tab
+    setShowTabSwitchNotice(false); // Clear tab switch notice
+    setExtractedPdfData(null); // Clear extracted PDF data
   };
 
   async function handleUpload() {
@@ -215,30 +396,175 @@ function AiResumeParserPage({ user }) {
     if (!text?.trim()) return;
     
     const userMessage = text.trim();
-    setChatMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    const isResumeContext = activeTab === 1;
+    
+    // Add message to appropriate chat
+    if (isResumeContext) {
+      setResumeContextMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    } else {
+      setGeneralChatMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    }
+    
     setQuestion('');
     setIsChatLoading(true);
 
     try {
-      // Call Firebase Function instead of direct API call
-      const geminiChat = httpsCallable(functions, 'geminiChat');
-      const result = await geminiChat({ message: userMessage });
+      if (isResumeContext && resumeText) {
+        // Resume context chat - include resume text in the prompt
+        let prompt = `You are an AI assistant analyzing a resume. Here is the resume content:`;
+        
+        // Add PDF metadata if available
+        if (extractedPdfData?.metadata) {
+          prompt += `\n\nDOCUMENT INFO:
+- Title: ${extractedPdfData.metadata.title || 'Not specified'}
+- Author: ${extractedPdfData.metadata.author || 'Not specified'}
+- Pages: ${extractedPdfData.metadata.numPages}
+- Tables Found: ${extractedPdfData.tables?.length || 0}`;
+        }
+        
+        // Add extracted resume sections if available
+        if (extractedPdfData) {
+          const resumeSections = extractResumeSections(extractedPdfData);
+          const availableSections = Object.entries(resumeSections)
+            .filter(([_, sections]) => sections.length > 0)
+            .map(([sectionType, sections]) => `${sectionType}: ${sections.length} items found`)
+            .join(', ');
+          
+          if (availableSections) {
+            prompt += `\n\nRESUME SECTIONS DETECTED:
+${availableSections}`;
+          }
+        }
+        
+        prompt += `\n\nRESUME CONTENT:
+${resumeText}
+
+USER QUESTION: ${userMessage}
+
+Please answer the question based on the resume content above. If the question cannot be answered from the resume, say so. Provide specific insights from the resume when possible.`;
+        
+        const geminiChat = httpsCallable(functions, 'geminiChat');
+        const result = await geminiChat({ message: prompt });
+        
+        if (result.data.success) {
+          setResumeContextMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: result.data.response }
+          ]);
+        } else {
+          throw new Error(result.data.error || 'Unknown error from Firebase Function');
+        }
+      } else {
+        // General chat
+        const geminiChat = httpsCallable(functions, 'geminiChat');
+        const result = await geminiChat({ message: userMessage });
+        
+        if (result.data.success) {
+          setGeneralChatMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: result.data.response }
+          ]);
+        } else {
+          throw new Error(result.data.error || 'Unknown error from Firebase Function');
+        }
+      }
+    } catch (error) {
+      const errorMessage = 'Sorry, I encountered an error while processing your request. Please try again.';
+      if (isResumeContext) {
+        setResumeContextMessages((prev) => [...prev, { role: 'assistant', content: errorMessage }]);
+      } else {
+        setGeneralChatMessages((prev) => [...prev, { role: 'assistant', content: errorMessage }]);
+      }
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  // Analyze resume against job requirements
+  const analyzeResume = async () => {
+    if (!resumeText?.trim()) {
+      setAnalysisError('Please upload a resume first to extract text content.');
+      return;
+    }
+    
+    if (!jobRequirements?.trim()) {
+      setAnalysisError('Please enter job requirements to analyze against.');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAnalysisError('');
+    setAnalysisResult(null);
+
+    try {
+      // Get text statistics for better analysis context
+      let analysisContext = resumeText.trim();
+      
+      if (extractedPdfData) {
+        const stats = getTextStatistics(extractedPdfData);
+        const resumeSections = extractResumeSections(extractedPdfData);
+        
+        // Get available sections
+        const availableSections = Object.entries(resumeSections)
+          .filter(([_, sections]) => sections.length > 0)
+          .map(([sectionType, sections]) => `${sectionType}: ${sections.length} items`)
+          .join(', ');
+        
+        analysisContext = `RESUME ANALYSIS CONTEXT:
+Document Statistics:
+- Total Words: ${stats.totalWords}
+- Total Sentences: ${stats.totalSentences}
+- Pages: ${stats.totalPages}
+- Tables Found: ${stats.tableCount}
+
+Resume Sections Detected:
+${availableSections || 'No specific sections detected'}
+
+RESUME CONTENT:
+${resumeText.trim()}
+
+JOB REQUIREMENTS:
+${jobRequirements.trim()}`;
+      } else {
+        analysisContext = `RESUME CONTENT:
+${resumeText.trim()}
+
+JOB REQUIREMENTS:
+${jobRequirements.trim()}`;
+      }
+
+      const analyzeResumeFunction = httpsCallable(functions, 'analyzeResume');
+      const result = await analyzeResumeFunction({ 
+        resumeText: analysisContext, 
+        jobRequirements: jobRequirements.trim() 
+      });
       
       if (result.data.success) {
-        setChatMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: result.data.response }
-        ]);
+        setAnalysisResult(result.data.response);
       } else {
-        throw new Error(result.data.error || 'Unknown error from Firebase Function');
+        throw new Error(result.data.error || 'Unknown error from analysis function');
       }
-         } catch (error) {
-       setChatMessages((prev) => [
-         ...prev,
-         { role: 'assistant', content: 'Sorry, I encountered an error while processing your request. Please try again.' }
-       ]);
-     } finally {
-      setIsChatLoading(false);
+    } catch (error) {
+      console.error('Resume analysis error:', error);
+      setAnalysisError(error.message || 'Failed to analyze resume. Please try again.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Clear analysis results
+  const clearAnalysis = () => {
+    setAnalysisResult(null);
+    setAnalysisError('');
+    setJobRequirements('');
+  };
+
+  // Clear chat based on active tab
+  const clearChat = () => {
+    if (activeTab === 0) {
+      setGeneralChatMessages([]);
+    } else {
+      setResumeContextMessages([]);
     }
   };
 
@@ -260,7 +586,7 @@ function AiResumeParserPage({ user }) {
            position: 'relative'
          }}
        >
-         {/* Left: Upload + PDF Preview */}
+         {/* Left: Upload + PDF Preview + Resume Analysis */}
          <Paper 
            elevation={0} 
            sx={{ 
@@ -273,12 +599,16 @@ function AiResumeParserPage({ user }) {
              flexDirection: 'column',
              width: `${leftPanelWidth}%`,
              minWidth: '300px',
-             maxWidth: '80%'
+             maxWidth: '80%',
+             overflowY: 'auto'
            }}
          >
            <Box sx={{ mb: 2 }}>
              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Upload Resume</Typography>
              <Typography variant="caption" color="text.secondary">PDF, DOC, DOCX. Max 5MB.</Typography>
+             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+              Note: Text extraction and analysis is available for PDF files only.
+            </Typography>
 
             {error ? (
               <Alert severity="error" sx={{ my: 2 }}>{error}</Alert>
@@ -309,9 +639,161 @@ function AiResumeParserPage({ user }) {
             {uploadedUrl ? (
               <Typography variant="body2" sx={{ mt: 1 }}>
                 Uploaded: <a href={uploadedUrl} target="_blank" rel="noreferrer">View file</a>
+                {isPdf && isExtractingText && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                    <CircularProgress size={16} />
+                    <Typography variant="caption" color="text.secondary">
+                      Extracting text from PDF...
+                    </Typography>
+                  </Box>
+                )}
+                {isPdf && resumeText && !isExtractingText && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="caption" color="success.main" sx={{ fontWeight: 500, display: 'block', mb: 1 }}>
+                      ✓ Text extracted successfully! Resume Context tab is now available.
+                    </Typography>
+                  </Box>
+                )}
               </Typography>
             ) : null}
           </Box>
+
+          {/* Resume Analysis Section */}
+          {resumeText && activeTab === 1 && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              
+              <Box sx={{ mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <AssessmentIcon color="primary" />
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Resume Analysis</Typography>
+                </Box>
+                
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Enter job requirements to analyze how well this resume matches the position.
+                  {resumeText && (
+                    <Box sx={{ mt: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        ✓ Text extracted: {resumeText.length} characters
+                      </Typography>
+                    </Box>
+                  )}
+                </Typography>
+
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={4}
+                  value={jobRequirements}
+                  onChange={(e) => setJobRequirements(e.target.value)}
+                  placeholder="Paste job description and requirements here..."
+                  variant="outlined"
+                  sx={{ mb: 2 }}
+                />
+
+                <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                  <Button
+                    variant="contained"
+                    onClick={analyzeResume}
+                    disabled={!jobRequirements.trim() || isAnalyzing}
+                    startIcon={isAnalyzing ? <CircularProgress size={20} /> : <AssessmentIcon />}
+                  >
+                    {isAnalyzing ? 'Analyzing...' : 'Analyze Resume'}
+                  </Button>
+                  
+                  {analysisResult && (
+                    <Button
+                      variant="outlined"
+                      onClick={clearAnalysis}
+                      size="small"
+                    >
+                      Clear Analysis
+                    </Button>
+                  )}
+                </Box>
+
+                {analysisError && (
+                  <Alert severity="error" sx={{ mb: 2 }}>{analysisError}</Alert>
+                )}
+
+                {analysisResult && (
+                  <Paper 
+                    elevation={1} 
+                    sx={{ 
+                      p: 2, 
+                      bgcolor: 'background.default',
+                      border: 1,
+                      borderColor: 'primary.main',
+                      borderRadius: 2
+                    }}
+                  >
+                    <Box sx={{ 
+                      fontSize: '0.875rem',
+                      lineHeight: 1.6,
+                      '& h1, & h2, & h3, & h4, & h5, & h6': { 
+                        mt: 0, mb: 1, color: 'text.primary',
+                        fontWeight: 600
+                      },
+                      '& h1': { fontSize: '1.25rem' },
+                      '& h2': { fontSize: '1.125rem' },
+                      '& h3, & h4, & h5, & h6': { fontSize: '1rem' },
+                      '& p': { 
+                        mt: 0, mb: 1, '&:last-child': { mb: 0 } 
+                      },
+                      '& ul, & ol': { 
+                        mt: 0, mb: 1, pl: 2 
+                      },
+                      '& li': { 
+                        mb: 0.5 
+                      },
+                      '& strong, & b': { 
+                        fontWeight: 600,
+                        color: 'primary.main'
+                      },
+                      '& em, & i': { 
+                        fontStyle: 'italic' 
+                      },
+                      '& code': { 
+                        bgcolor: 'action.hover', 
+                        px: 0.5, 
+                        py: 0.25, 
+                        borderRadius: 0.5,
+                        fontFamily: 'monospace',
+                        fontSize: '0.875em'
+                      },
+                      '& pre': { 
+                        bgcolor: 'action.hover', 
+                        p: 1, 
+                        borderRadius: 1,
+                        overflow: 'auto',
+                        '& code': { 
+                          bgcolor: 'transparent', 
+                          p: 0 
+                        }
+                      },
+                      '& blockquote': {
+                        borderLeft: 3,
+                        borderColor: 'primary.main',
+                        pl: 2,
+                        ml: 0,
+                        my: 1,
+                        fontStyle: 'italic',
+                        color: 'text.secondary'
+                      },
+                      '& hr': {
+                        border: 'none',
+                        borderTop: 1,
+                        borderColor: 'divider',
+                        my: 1
+                      }
+                    }}>
+                      <ReactMarkdown>{analysisResult}</ReactMarkdown>
+                    </Box>
+                  </Paper>
+                )}
+              </Box>
+            </>
+          )}
 
                      <Divider sx={{ my: 2 }} />
 
@@ -444,11 +926,11 @@ function AiResumeParserPage({ user }) {
                >
                  Layout: <VerticalSplitIcon />
                </Button>
-               {chatMessages.length > 0 && (
+               {((activeTab === 0 && generalChatMessages.length > 0) || (activeTab === 1 && resumeContextMessages.length > 0)) && (
                  <Button
                    size="small"
                    variant="outlined"
-                   onClick={() => setChatMessages([])}
+                   onClick={clearChat}
                    sx={{ minWidth: 'auto', px: 1 }}
                  >
                    Clear Chat
@@ -457,93 +939,162 @@ function AiResumeParserPage({ user }) {
              </Box>
            </Box>
 
+           {/* Chat Tabs */}
+           <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+             <Tabs 
+               value={activeTab} 
+               onChange={(e, newValue) => setActiveTab(newValue)}
+               sx={{ minHeight: 'auto' }}
+             >
+               <Tab 
+                 label="General Chat" 
+                 sx={{ 
+                   minHeight: 'auto', 
+                   py: 1,
+                   fontSize: '0.875rem'
+                 }} 
+               />
+               <Tab 
+                 label="Resume Context" 
+                 disabled={!resumeText}
+                 sx={{ 
+                   minHeight: 'auto', 
+                   py: 1,
+                   fontSize: '0.875rem',
+                   '&.Mui-disabled': {
+                     opacity: 0.5,
+                   },
+                   ...(resumeText && {
+                     color: 'success.main',
+                     fontWeight: 600,
+                   })
+                 }} 
+               />
+             </Tabs>
+           </Box>
+
+           {/* Resume Context Notice */}
+           {activeTab === 1 && !resumeText && (
+             <Alert severity="info" sx={{ mb: 2 }}>
+               📄 Upload a PDF resume to enable resume context chat and analysis. This tab will allow you to ask questions specifically about the uploaded resume and analyze it against job requirements.
+             </Alert>
+           )}
+
+           {/* Auto-switch Notice */}
+           {showTabSwitchNotice && activeTab === 1 && (
+             <Alert 
+               severity="success" 
+               sx={{ mb: 2 }}
+               onClose={() => setShowTabSwitchNotice(false)}
+             >
+               🎯 Auto-switched to Resume Context tab! You can now ask questions about the uploaded resume and analyze it against job requirements.
+             </Alert>
+           )}
+
            {/* Chat Messages */}
            <Box sx={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, mb: 2 }}>
-             {chatMessages.length === 0 ? (
-               <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
-                 <Typography variant="body1" sx={{ mb: 2 }}>👋 Welcome! I'm your AI assistant.</Typography>
-                 <Typography variant="body2">Ask me anything or pick a suggestion below to get started.</Typography>
-               </Box>
-             ) : chatMessages.map((m, idx) => (
-               <Box key={idx} sx={{
-                 alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                 bgcolor: m.role === 'user' ? 'primary.main' : 'background.default',
-                 color: m.role === 'user' ? 'white' : 'text.primary',
-                 px: 3,
-                 py: 2,
-                 borderRadius: 3,
-                 maxWidth: '85%',
-                 border: m.role === 'assistant' ? 1 : 0,
-                 borderColor: 'divider',
-                 boxShadow: m.role === 'user' ? 1 : 0
-               }}>
-                 {m.role === 'user' ? (
-                   <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>
-                 ) : (
-                   <Box sx={{ 
-                     fontSize: '0.875rem',
-                     lineHeight: 1.6,
-                     '& h1, & h2, & h3, & h4, & h5, & h6': { 
-                       mt: 0, mb: 1, color: 'text.primary',
-                       fontWeight: 600
-                     },
-                     '& h1': { fontSize: '1.25rem' },
-                     '& h2': { fontSize: '1.125rem' },
-                     '& h3, & h4, & h5, & h6': { fontSize: '1rem' },
-                     '& p': { 
-                       mt: 0, mb: 1, '&:last-child': { mb: 0 } 
-                     },
-                     '& ul, & ol': { 
-                       mt: 0, mb: 1, pl: 2 
-                     },
-                     '& li': { 
-                       mb: 0.5 
-                     },
-                     '& strong, & b': { 
-                       fontWeight: 600 
-                     },
-                     '& em, & i': { 
-                       fontStyle: 'italic' 
-                     },
-                     '& code': { 
-                       bgcolor: 'action.hover', 
-                       px: 0.5, 
-                       py: 0.25, 
-                       borderRadius: 0.5,
-                       fontFamily: 'monospace',
-                       fontSize: '0.875em'
-                     },
-                     '& pre': { 
-                       bgcolor: 'action.hover', 
-                       p: 1, 
-                       borderRadius: 1,
-                       overflow: 'auto',
+             {(() => {
+               const messages = activeTab === 0 ? generalChatMessages : resumeContextMessages;
+               
+               if (messages.length === 0) {
+                 if (activeTab === 0) {
+                   return (
+                     <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                       <Typography variant="body1" sx={{ mb: 2 }}>👋 Welcome! I&apos;m your AI assistant.</Typography>
+                       <Typography variant="body2">Ask me anything or pick a suggestion below to get started.</Typography>
+                     </Box>
+                   );
+                 } else {
+                   return (
+                     <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                       <Typography variant="body1" sx={{ mb: 2 }}>📄 Resume Context Chat</Typography>
+                       <Typography variant="body2">Ask questions about the uploaded resume to get AI-powered insights.</Typography>
+                     </Box>
+                   );
+                 }
+               }
+               
+               return messages.map((m, idx) => (
+                 <Box key={idx} sx={{
+                   alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                   bgcolor: m.role === 'user' ? 'primary.main' : 'background.default',
+                   color: m.role === 'user' ? 'white' : 'text.primary',
+                   px: 3,
+                   py: 2,
+                   borderRadius: 3,
+                   maxWidth: '85%',
+                   border: m.role === 'assistant' ? 1 : 0,
+                   borderColor: 'divider',
+                   boxShadow: m.role === 'user' ? 1 : 0
+                 }}>
+                   {m.role === 'user' ? (
+                     <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>
+                   ) : (
+                     <Box sx={{ 
+                       fontSize: '0.875rem',
+                       lineHeight: 1.6,
+                       '& h1, & h2, & h3, & h4, & h5, & h6': { 
+                         mt: 0, mb: 1, color: 'text.primary',
+                         fontWeight: 600
+                       },
+                       '& h1': { fontSize: '1.25rem' },
+                       '& h2': { fontSize: '1.125rem' },
+                       '& h3, & h4, & h5, & h6': { fontSize: '1rem' },
+                       '& p': { 
+                         mt: 0, mb: 1, '&:last-child': { mb: 0 } 
+                       },
+                       '& ul, & ol': { 
+                         mt: 0, mb: 1, pl: 2 
+                       },
+                       '& li': { 
+                         mb: 0.5 
+                       },
+                       '& strong, & b': { 
+                         fontWeight: 600 
+                       },
+                       '& em, & i': { 
+                         fontStyle: 'italic' 
+                       },
                        '& code': { 
-                         bgcolor: 'transparent', 
-                         p: 0 
+                         bgcolor: 'action.hover', 
+                         px: 0.5, 
+                         py: 0.25, 
+                         borderRadius: 0.5,
+                         fontFamily: 'monospace',
+                         fontSize: '0.875em'
+                       },
+                       '& pre': { 
+                         bgcolor: 'action.hover', 
+                         p: 1, 
+                         borderRadius: 1,
+                         overflow: 'auto',
+                         '& code': { 
+                           bgcolor: 'transparent', 
+                           p: 0 
+                         }
+                       },
+                       '& blockquote': {
+                         borderLeft: 3,
+                         borderColor: 'primary.main',
+                         pl: 2,
+                         ml: 0,
+                         my: 1,
+                         fontStyle: 'italic',
+                         color: 'text.secondary'
+                       },
+                       '& hr': {
+                         border: 'none',
+                         borderTop: 1,
+                         borderColor: 'divider',
+                         my: 1
                        }
-                     },
-                     '& blockquote': {
-                       borderLeft: 3,
-                       borderColor: 'primary.main',
-                       pl: 2,
-                       ml: 0,
-                       my: 1,
-                       fontStyle: 'italic',
-                       color: 'text.secondary'
-                     },
-                     '& hr': {
-                       border: 'none',
-                       borderTop: 1,
-                       borderColor: 'divider',
-                       my: 1
-                     }
-                   }}>
-                     <ReactMarkdown>{m.content}</ReactMarkdown>
-                   </Box>
-                 )}
-               </Box>
-             ))}
+                     }}>
+                       <ReactMarkdown>{m.content}</ReactMarkdown>
+                     </Box>
+                   )}
+                 </Box>
+               ));
+             })()}
              
              {isChatLoading && (
                <Box sx={{
@@ -566,23 +1117,59 @@ function AiResumeParserPage({ user }) {
            </Box>
 
            {/* Suggested Questions */}
-           {chatMessages.length === 0 && (
-             <Box sx={{ mb: 2 }}>
-               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Try asking:</Typography>
-               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                 {suggestedQuestions.map((q) => (
-                   <Chip 
-                     key={q} 
-                     label={q} 
-                     onClick={() => ask(q)}
-                     variant="outlined"
-                     size="small"
-                     sx={{ cursor: 'pointer' }}
-                   />
-                 ))}
-               </Box>
-             </Box>
-           )}
+           {(() => {
+             const messages = activeTab === 0 ? generalChatMessages : resumeContextMessages;
+             
+             if (messages.length === 0) {
+               if (activeTab === 0) {
+                 return (
+                   <Box sx={{ mb: 2 }}>
+                     <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Try asking:</Typography>
+                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                       {suggestedQuestions.map((q) => (
+                         <Chip 
+                           key={q} 
+                           label={q} 
+                           onClick={() => ask(q)}
+                           variant="outlined"
+                           size="small"
+                           sx={{ cursor: 'pointer' }}
+                         />
+                       ))}
+                     </Box>
+                   </Box>
+                 );
+               } else {
+                 return (
+                   <Box sx={{ mb: 2 }}>
+                     <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Try asking about the resume:</Typography>
+                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                       {[
+                         'What are the candidate\'s key skills?',
+                         'How many years of experience do they have?',
+                         'What technologies are they proficient in?',
+                         'What is their educational background?',
+                         'What are their main achievements?',
+                         'Analyze this resume against a software developer role',
+                         'What are the strengths and weaknesses of this resume?',
+                         'Suggest improvements for this resume'
+                       ].map((q) => (
+                         <Chip 
+                           key={q} 
+                           label={q} 
+                           onClick={() => ask(q)}
+                           variant="outlined"
+                           size="small"
+                           sx={{ cursor: 'pointer' }}
+                         />
+                       ))}
+                     </Box>
+                   </Box>
+                 );
+               }
+             }
+             return null;
+           })()}
 
            {/* Input Area */}
            <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }}>
@@ -598,7 +1185,7 @@ function AiResumeParserPage({ user }) {
                      }
                    }
                  }}
-                 placeholder="Ask anything... (Press Enter to send)"
+                 placeholder={activeTab === 0 ? "Ask anything... (Press Enter to send)" : "Ask about the resume... (Press Enter to send)"}
                  multiline
                  minRows={1}
                  maxRows={4}

@@ -24,6 +24,7 @@
     "js-cookie": "^3.0.5",
     "jspdf": "^3.0.1",
     "next": "14.2.2",
+    "pdfjs-dist": "^2.16.105",
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

@@ -12,11 +12,11 @@ const withAuth = (WrappedComponent, allowedRoles = []) => {
     useEffect(() => {
       if (!loading) {
         if (!user) {
-                  console.log('🔒 No user found, redirecting to /');
-        router.replace('/');
+          console.log('🔒 No user found, redirecting to /');
+          router.replace('/login');
           return;
         }
-        
+
         if (!checkRole(allowedRoles)) {
           console.log(`🚫 User role '${user.role}' not authorized for ${allowedRoles.join(', ')}. Redirecting.`);
           router.replace('/unauthorized');
@@ -27,11 +27,11 @@ const withAuth = (WrappedComponent, allowedRoles = []) => {
 
     if (loading || !user || !checkRole(allowedRoles)) {
       return (
-        <Box sx={{ 
-          display: 'flex', 
-          justifyContent: 'center', 
-          alignItems: 'center', 
-          height: '100vh' 
+        <Box sx={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh'
         }}>
           <CircularProgress />
         </Box>

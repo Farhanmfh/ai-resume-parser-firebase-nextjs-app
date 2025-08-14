@@ -31,9 +31,9 @@ export default function NotFound() {
           <Typography variant="body1" color="text.secondary">
             Oops! The page you&apos;re looking for doesn&apos;t exist or has been moved.
           </Typography>
-          <Button 
-            variant="contained" 
-            color="primary" 
+          <Button
+            variant="contained"
+            color="primary"
             onClick={() => router.push("/")}
             fullWidth
             size="large"

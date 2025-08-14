@@ -43,7 +43,7 @@ export const updateUserRole = async (userId, newRole) => {
   try {
     // Update role via Cloud Run endpoint
     await updateRole(userId, newRole);
-    
+
     // Force token refresh if it's the current user
     if (auth.currentUser?.uid === userId) {
       await auth.currentUser.getIdToken(true);
@@ -51,7 +51,7 @@ export const updateUserRole = async (userId, newRole) => {
       const userData = await mapUserData(auth.currentUser);
       setUserCookie(userData);
     }
-    
+
     return true;
   } catch (error) {
     console.error('Error updating user role:', error);

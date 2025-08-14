@@ -1,4 +1,4 @@
- 'use client';
+'use client';
 
 import { useState, useMemo, useContext } from 'react';
 import { styled } from '@mui/material/styles';

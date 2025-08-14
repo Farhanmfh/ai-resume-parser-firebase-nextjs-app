@@ -1,9 +1,9 @@
- 'use client'
+'use client'
 import { createContext, useEffect, useMemo, useState } from 'react';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
-export const ColorModeContext = createContext({ mode: 'light', toggleColorMode: () => {} });
+export const ColorModeContext = createContext({ mode: 'light', toggleColorMode: () => { } });
 
 const getDesignTokens = (mode) => ({
   palette: {

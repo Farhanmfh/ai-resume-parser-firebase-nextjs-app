@@ -6,11 +6,11 @@ import withAuth from '@/firebase/withAuth';
 import { db, storage } from '@/firebase/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getFileBlobUrl, cleanupBlobUrl } from '@/utils/storageHelper';
+import { getFileBlobUrl, } from '@/utils/storageHelper';
 import { extractPdfText, getFormattedTextForAI, getTextStatistics, extractResumeSections } from '@/utils/pdfTextExtractor';
 import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
-import WorkIcon from '@mui/icons-material/Work';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 import ReactMarkdown from 'react-markdown';
 import {
@@ -23,11 +23,13 @@ import {
   Chip,
   Alert,
   CircularProgress,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
   Tabs,
   Tab,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  DialogContentText,
 } from '@mui/material';
 import { useState as useReactState } from 'react';
 
@@ -39,9 +41,7 @@ function AiResumeParserPage({ user }) {
   const [error, setError] = useState('');
 
   const [question, setQuestion] = useState('');
-  const [chatMessages, setChatMessages] = useState([]); // {role: 'user'|'assistant', content}
   const [isChatLoading, setIsChatLoading] = useState(false);
-  const theme = useTheme();
   const [pdfError, setPdfError] = useState('');
   const [pdfBlobUrl, setPdfBlobUrl] = useState('');
   const pdfBlobUrlRef = useRef('');
@@ -67,11 +67,66 @@ function AiResumeParserPage({ user }) {
   const [isResizing, setIsResizing] = useState(false);
   const isResizingRef = useRef(false); // Use ref to avoid state update delays
   
+  // Drag and drop state
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [pendingFile, setPendingFile] = useState(null);
 
   const isPdf = useMemo(
     () => (file?.type === 'application/pdf') || (uploadedUrl?.toLowerCase()?.includes('.pdf')),
     [file, uploadedUrl]
   );
+
+  // Drag and drop handlers
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    if (droppedFiles.length > 0) {
+      const droppedFile = droppedFiles[0];
+      if (droppedFile.type === 'application/pdf') {
+        setPendingFile(droppedFile);
+        setShowUploadModal(true);
+      } else {
+        setError('Only PDF files are allowed.');
+      }
+    }
+  }, []);
+
+  const handleFileConfirmation = useCallback((confirmedFile) => {
+    setFile(confirmedFile);
+    setPendingFile(null);
+    // Keep modal open for upload step
+    setError('');
+    setPdfError('');
+    setPdfBlobUrl('');
+    setResumeText('');
+    setAnalysisResult(null);
+    setAnalysisError('');
+    setResumeContextMessages([]);
+    setActiveTab(0);
+    setShowTabSwitchNotice(false);
+    setExtractedPdfData(null);
+  }, []);
+
+  const handleCancelUpload = useCallback(() => {
+    setPendingFile(null);
+    setShowUploadModal(false);
+  }, []);
 
   // Auto-scroll to bottom when new messages arrive
   const currentMessages = activeTab === 0 ? generalChatMessages : resumeContextMessages;
@@ -284,19 +339,10 @@ function AiResumeParserPage({ user }) {
 
   const handleFileChange = (e) => {
     const chosen = e.target.files?.[0] || null;
-    setFile(chosen);
-    setUploadedUrl('');
-    setStoragePath('');
-    setError('');
-    setPdfError('');
-    setPdfBlobUrl('');
-    setResumeText(''); // Clear previous resume text
-    setAnalysisResult(null); // Clear previous analysis
-    setAnalysisError(''); // Clear previous analysis errors
-    setResumeContextMessages([]); // Clear resume context chat
-    setActiveTab(0); // Reset to General Chat tab
-    setShowTabSwitchNotice(false); // Clear tab switch notice
-    setExtractedPdfData(null); // Clear extracted PDF data
+    if (chosen) {
+      setPendingFile(chosen);
+      setShowUploadModal(true);
+    }
   };
 
   async function handleUpload() {
@@ -319,6 +365,9 @@ function AiResumeParserPage({ user }) {
         setStoragePath(path);
         
         setIsUploading(false); // stop spinner as soon as file upload completes
+
+        // Close the modal after successful upload
+        setShowUploadModal(false);
 
        // Save metadata with retry mechanism
        const saveToFirestore = async (retryCount = 0) => {
@@ -659,60 +708,56 @@ ${jobRequirements.trim()}`;
              overflowY: 'auto'
            }}
          >
-           <Box sx={{ mb: 2 }}>
-             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Upload Resume</Typography>
-             <Typography variant="caption" color="text.secondary">PDF only. Max 5MB.</Typography>
-             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-              Note: Text extraction and analysis is available for PDF files only.
-            </Typography>
-
-            {error ? (
-              <Alert severity="error" sx={{ my: 2 }}>{error}</Alert>
-            ) : null}
-
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-              <input
-                id="resume-input-arp"
-                type="file"
-                accept=".pdf,application/pdf"
-                onChange={handleFileChange}
-                style={{ display: 'none' }}
-              />
-              <label htmlFor="resume-input-arp">
-                <Button variant="outlined" component="span">
-                  {file ? 'Change file' : 'Choose resume'}
-                </Button>
-              </label>
-              {file ? (
-                <Typography variant="body2" color="text.secondary">{file.name}</Typography>
-              ) : null}
-              <Box sx={{ flexGrow: 1 }} />
-              <Button onClick={handleUpload} disabled={!file || isUploading} variant="contained" color="primary">
-                {isUploading ? <CircularProgress size={18} /> : 'Upload'}
-              </Button>
+          {/* PDF Preview Section - Show at top when uploaded */}
+          {uploadedUrl && isPdf && (
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, pb: 1, borderBottom: 1, borderColor: 'divider' }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>PDF Preview</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    href={uploadedUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    sx={{ minWidth: 'auto', px: 1 }}
+                  >
+                    Open in New Tab
+                  </Button>
+                </Box>
+              </Box>
+              
+              <Box sx={{ display: 'flex', justifyContent: 'center', minHeight: '300px', border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}>
+                {!pdfBlobUrl ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 4 }}>
+                    <CircularProgress size={24} />
+                    <Typography variant="body2" sx={{ mt: 1 }}>Loading PDF...</Typography>
+                  </Box>
+                ) : pdfError ? (
+                  <Alert severity="warning" sx={{ mt: 1 }}>{pdfError}</Alert>
+                ) : (
+                  <iframe
+                    src={pdfBlobUrl}
+                    width="100%"
+                    height="400px"
+                    style={{
+                      border: 'none',
+                      borderRadius: '4px',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                    }}
+                    title="PDF Preview"
+                    onLoad={() => {
+                      // PDF loaded successfully
+                      setPdfError('');
+                    }}
+                    onError={() => {
+                      setPdfError('Failed to load PDF. You can still download and view the file.');
+                    }}
+                  />
+                )}
+              </Box>
             </Box>
-
-            {uploadedUrl ? (
-              <Typography variant="body2" sx={{ mt: 1 }}>
-                Uploaded: <a href={uploadedUrl} target="_blank" rel="noreferrer">View file</a>
-                {isPdf && isExtractingText && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-                    <CircularProgress size={16} />
-                    <Typography variant="caption" color="text.secondary">
-                      Extracting text from PDF...
-                    </Typography>
-                  </Box>
-                )}
-                {isPdf && resumeText && !isExtractingText && (
-                  <Box sx={{ mt: 1 }}>
-                    <Typography variant="caption" color="success.main" sx={{ fontWeight: 500, display: 'block', mb: 1 }}>
-                      ✓ Text extracted successfully! Resume Context tab is now available.
-                    </Typography>
-                  </Box>
-                )}
-              </Typography>
-            ) : null}
-          </Box>
+          )}
 
           {/* Resume Analysis Section */}
           {resumeText && activeTab === 1 && (
@@ -803,8 +848,7 @@ ${jobRequirements.trim()}`;
                         mb: 0.5 
                       },
                       '& strong, & b': { 
-                        fontWeight: 600,
-                        color: 'primary.main'
+                        fontWeight: 600 
                       },
                       '& em, & i': { 
                         fontStyle: 'italic' 
@@ -851,58 +895,112 @@ ${jobRequirements.trim()}`;
             </>
           )}
 
-                     <Divider sx={{ my: 2 }} />
+          <Divider sx={{ my: 2 }} />
 
-                     {/* PDF Viewer Section */}
-                     {uploadedUrl && isPdf && (
-                       <Box sx={{ mb: 2 }}>
-                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, pb: 1, borderBottom: 1, borderColor: 'divider' }}>
-                           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>PDF Preview</Typography>
-                                                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                href={uploadedUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                sx={{ minWidth: 'auto', px: 1 }}
-                              >
-                                Open in New Tab
-                              </Button>
-                            </Box>
-                         </Box>
-                         
-                         <Box sx={{ display: 'flex', justifyContent: 'center', minHeight: '300px', border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}>
-                           {!pdfBlobUrl ? (
-                             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 4 }}>
-                               <CircularProgress size={24} />
-                               <Typography variant="body2" sx={{ mt: 1 }}>Loading PDF...</Typography>
-                             </Box>
-                           ) : pdfError ? (
-                             <Alert severity="warning" sx={{ mt: 1 }}>{pdfError}</Alert>
-                           ) : (
-                                                           <iframe
-                                src={pdfBlobUrl}
-                                width="100%"
-                                height="400px"
-                                style={{
-                                  border: 'none',
-                                  borderRadius: '4px',
-                                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                                }}
-                                title="PDF Preview"
-                                onLoad={() => {
-                                  // PDF loaded successfully
-                                  setPdfError('');
-                                }}
-                                onError={() => {
-                                  setPdfError('Failed to load PDF. You can still download and view the file.');
-                                }}
-                              />
-                           )}
-                         </Box>
-                       </Box>
-                     )}
+          {/* Upload Section - Moved to bottom when file is uploaded */}
+          {
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Upload Resume</Typography>
+              <Typography variant="caption" color="text.secondary">PDF only. Max 5MB.</Typography>
+                         {error ? (
+                <Alert severity="error" sx={{ my: 2 }}>{error}</Alert>
+              ) : null}
+
+              {/* File Info Display */}
+              {file && (
+                <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      Selected file: {file.name}
+                    </Typography>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        setFile(null);
+                        setShowUploadModal(true);
+                      }}
+                    >
+                      Change File
+                    </Button>
+                  </Box>
+                  <Typography variant="caption" color="text.secondary">
+                    Size: {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </Typography>
+                </Box>
+              )}
+
+              {uploadedUrl ? (
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Uploaded: <a href={uploadedUrl} target="_blank" rel="noopener noreferrer">View file</a>
+                  {isPdf && isExtractingText && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                      <CircularProgress size={16} />
+                      <Typography variant="caption" color="text.secondary">
+                        Extracting text from PDF...
+                      </Typography>
+                    </Box>
+                  )}
+                  {isPdf && resumeText && !isExtractingText && (
+                    <Box sx={{ mt: 1 }}>
+                      <Typography variant="caption" color="success.main" sx={{ fontWeight: 500, display: 'block', mb: 1 }}>
+                        ✓ Text extracted successfully! Resume Context tab is now available.
+                      </Typography>
+                    </Box>
+                  )}
+                </Typography>
+              ) : null}
+
+                    {/* Drag and Drop Zone */}
+                    <Box
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                sx={{
+                  border: 2,
+                  borderStyle: 'dashed',
+                  borderColor: isDragOver ? 'primary.main' : 'divider',
+                  borderRadius: 2,
+                  p: 3,
+                  textAlign: 'center',
+                  bgcolor: isDragOver ? 'action.hover' : 'background.default',
+                  transition: 'all 0.2s ease',
+                  cursor: 'pointer',
+                  '&:hover': {
+                    borderColor: 'primary.main',
+                    bgcolor: 'action.hover',
+                  }
+                }}
+              >
+                <CloudUploadIcon 
+                  sx={{ 
+                    fontSize: 48, 
+                    color: isDragOver ? 'primary.main' : 'text.secondary',
+                    mb: 2 
+                  }} 
+                />
+                <Typography variant="h6" sx={{ mb: 1, color: isDragOver ? 'primary.main' : 'text.primary' }}>
+                  {isDragOver ? 'Drop your PDF here' : 'Drag & Drop PDF Resume'}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  or click below to browse files
+                </Typography>
+                
+                <input
+                  id="resume-input-arp"
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={handleFileChange}
+                  style={{ display: 'none' }}
+                />
+                <label htmlFor="resume-input-arp">
+                  <Button variant="outlined" component="span">
+                    Choose resume
+                  </Button>
+                </label>
+              </Box>
+            </Box>
+          }
 
                      
                  </Paper>
@@ -1270,6 +1368,88 @@ ${jobRequirements.trim()}`;
           </Paper>
         </Box>
       </Box>
+
+      {/* Upload Confirmation Modal */}
+      <Dialog
+        open={showUploadModal}
+        onClose={handleCancelUpload}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CloudUploadIcon color="primary" />
+          {!file ? 'Confirm File Selection' : 'Upload Resume'}
+        </DialogTitle>
+        <DialogContent>
+          {!file ? (
+            <>
+              <DialogContentText sx={{ mb: 2 }}>
+                Are you sure you want to select this file?
+              </DialogContentText>
+              {pendingFile && (
+                <Box sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
+                  <Typography variant="body1" sx={{ fontWeight: 600, mb: 1 }}>
+                    {pendingFile.name}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Size: {(pendingFile.size / 1024 / 1024).toFixed(2)} MB
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Type: {pendingFile.type}
+                  </Typography>
+                </Box>
+              )}
+              <DialogContentText variant="caption" color="text.secondary">
+                This will replace any previously selected file and clear current analysis results.
+              </DialogContentText>
+            </>
+          ) : (
+            <>
+              <DialogContentText sx={{ mb: 2 }}>
+                Ready to upload your resume?
+              </DialogContentText>
+              <Box sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
+                <Typography variant="body1" sx={{ fontWeight: 600, mb: 1 }}>
+                  {file.name}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Size: {(file.size / 1024 / 1024).toFixed(2)} MB
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Type: {file.type}
+                </Typography>
+              </Box>
+              <DialogContentText variant="caption" color="text.secondary">
+                Click Upload to proceed with the upload process.
+              </DialogContentText>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button onClick={handleCancelUpload} variant="outlined">
+            Cancel
+          </Button>
+          {!file ? (
+            <Button 
+              onClick={() => handleFileConfirmation(pendingFile)} 
+              variant="contained" 
+              color="primary"
+              disabled={!pendingFile}
+            >
+              Select File
+            </Button>
+          ) : (
+            <Button 
+              onClick={handleUpload} 
+              variant="contained" 
+              color="primary"
+              disabled={!file || isUploading}
+            >
+              {isUploading ? <CircularProgress size={18} /> : 'Upload'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

@@ -11,8 +11,8 @@ const inter = Inter({
 });
 
 export const metadata = {
-  title: 'Ai Resume Parser',
-  description: 'Ai Resume Parser by MFH',
+  title: 'AI Resume Parser',
+  description: 'AI Resume Parser by MFH',
   icons: {
     icon: '/assets/favicon.ico',
     shortcut: '/assets/favicon.ico',

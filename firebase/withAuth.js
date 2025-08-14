@@ -2,7 +2,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { Box, CircularProgress } from '@mui/material';
+import { Box, Button, CircularProgress } from '@mui/material';
 
 const withAuth = (WrappedComponent, allowedRoles = []) => {
   return function ProtectedRoute(props) {
@@ -33,7 +33,15 @@ const withAuth = (WrappedComponent, allowedRoles = []) => {
           alignItems: 'center',
           height: '100vh'
         }}>
-          <CircularProgress />
+          {/* <CircularProgress /> */}
+          <Button 
+            variant="contained" 
+            component="a" 
+            href="https://ai-resume-parser-f8ff7.web.app/"
+            sx={{ textDecoration: 'none' }}
+          >
+            Go back to Login
+          </Button>
         </Box>
       );
     }

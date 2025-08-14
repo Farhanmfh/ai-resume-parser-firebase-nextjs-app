@@ -23,7 +23,7 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={inter.className}>
-      <body style={{ margin: 0, backgroundColor: '#f5f5f5' }}>
+      <body style={{ margin: 0}}>
         <Providers>
           <AuthContextProvider>
             <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>

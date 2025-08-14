@@ -266,8 +266,6 @@ function AiResumeParserPage({ user }) {
   const maxBytes = 5 * 1024 * 1024; // 5MB
   const allowedTypes = [
     'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   ];
 
   const suggestedQuestions = useMemo(() => [
@@ -279,8 +277,8 @@ function AiResumeParserPage({ user }) {
   ], []);
 
   const validate = () => {
-    if (!file) return 'Please choose a resume file (PDF or DOC/DOCX).';
-    if (!allowedTypes.includes(file.type)) return 'Only PDF or DOC/DOCX files are allowed.';
+    if (!file) return 'Please choose a resume file (PDF only).';
+    if (!allowedTypes.includes(file.type)) return 'Only PDF files are allowed.';
     if (file.size > maxBytes) return 'File size must be 5MB or smaller.';
     return '';
   };
@@ -605,7 +603,7 @@ ${jobRequirements.trim()}`;
          >
            <Box sx={{ mb: 2 }}>
              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Upload Resume</Typography>
-             <Typography variant="caption" color="text.secondary">PDF, DOC, DOCX. Max 5MB.</Typography>
+             <Typography variant="caption" color="text.secondary">PDF only. Max 5MB.</Typography>
              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
               Note: Text extraction and analysis is available for PDF files only.
             </Typography>
@@ -618,7 +616,7 @@ ${jobRequirements.trim()}`;
               <input
                 id="resume-input-arp"
                 type="file"
-                accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                accept=".pdf,application/pdf"
                 onChange={handleFileChange}
                 style={{ display: 'none' }}
               />

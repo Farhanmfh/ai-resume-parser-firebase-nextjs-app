@@ -3,7 +3,6 @@
 import { useState, useMemo, useContext } from 'react';
 import { styled } from '@mui/material/styles';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { ColorModeContext } from '@/app/providers';
 import {
@@ -24,8 +23,6 @@ export default function NavBar() {
   const { user, logout } = useAuth();
   const { mode, toggleColorMode } = useContext(ColorModeContext);
   const [anchorEl, setAnchorEl] = useState(null);
-  const pathname = usePathname();
-  const isLoginRoute = pathname === '/login';
 
   const open = Boolean(anchorEl);
 
@@ -109,6 +106,7 @@ export default function NavBar() {
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <MaterialUISwitch checked={mode === 'dark'} onChange={toggleColorMode} inputProps={{ 'aria-label': 'toggle dark mode' }} />
             {user ? (
               <>
                 <IconButton onClick={handleAvatarClick} size="small" aria-controls={open ? 'account-menu' : undefined} aria-haspopup="true" aria-expanded={open ? 'true' : undefined}>
@@ -116,7 +114,6 @@ export default function NavBar() {
                     {userInitial}
                   </Avatar>
                 </IconButton>
-                <MaterialUISwitch checked={mode === 'dark'} onChange={toggleColorMode} inputProps={{ 'aria-label': 'toggle dark mode' }} />
                 <Menu
                   anchorEl={anchorEl}
                   id="account-menu"
@@ -140,13 +137,7 @@ export default function NavBar() {
                   <MenuItem sx={{ color: 'red' }} onClick={handleLogout}>Logout</MenuItem>
                 </Menu>
               </>
-            ) : (
-              !isLoginRoute && (
-                <Button component={Link} href="/login" variant="contained">
-                  Login
-                </Button>
-              )
-            )}
+            ) : null}
           </Box>
         </Toolbar>
       </Container>

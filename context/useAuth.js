@@ -23,7 +23,7 @@ export function useAuth() {
       await auth.signOut();
       removeUserCookie();
       setUser(null);
-      router.push('/login');
+      router.push('/');
     } catch (error) {
       console.error('Error signing out:', error);
     }

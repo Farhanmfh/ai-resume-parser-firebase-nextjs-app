@@ -9,14 +9,10 @@ export default function Footer() {
         <Typography variant="body2" color="text.secondary">
           © {new Date().getFullYear()} AI Resume Parser
         </Typography>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <MuiLink href="/" underline="hover" color="text.secondary" variant="body2">
-            Home
-          </MuiLink>
-          <MuiLink href="/login" underline="hover" color="text.secondary" variant="body2">
-            Login
-          </MuiLink>
-        </Box>
+        <Typography variant="body2" color="text.secondary">
+          Project created by Mohammed Farhan Hussain - Roll No.2314507660
+        </Typography>
+
       </Container>
     </Box>
   );

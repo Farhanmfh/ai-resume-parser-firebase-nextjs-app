@@ -12,8 +12,8 @@ const withAuth = (WrappedComponent, allowedRoles = []) => {
     useEffect(() => {
       if (!loading) {
         if (!user) {
-          console.log('🔒 No user found, redirecting to /login');
-          router.replace('/login');
+                  console.log('🔒 No user found, redirecting to /');
+        router.replace('/');
           return;
         }
         

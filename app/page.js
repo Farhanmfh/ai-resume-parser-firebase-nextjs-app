@@ -1,227 +1,151 @@
- 'use client';
+'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { signInWithGoogle } from '@/firebase/users';
+
+// MUI
 import {
   Box,
   Paper,
   Typography,
   TextField,
   Button,
-  CircularProgress,
   Divider,
-  Container,
-  Alert,
+  CircularProgress,
 } from '@mui/material';
-import { db, storage } from '@/firebase/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { Google } from '@mui/icons-material';
 
 export default function Home() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { user, login } = useAuth();
+
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!loading && user) {
-      router.replace('/ai-resume-parser');
-    }
-  }, [user, loading, router]);
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [file, setFile] = useState(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [uploadedUrl, setUploadedUrl] = useState('');
+    if (user) router.replace('/ai-resume-parser');
+  }, [user, router]);
 
-  const maxBytes = 5 * 1024 * 1024; // 5MB
-  const allowedTypes = [
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  ];
-
-  const validate = () => {
-    if (!name.trim() || !email.trim() || !file) {
-      return 'Please fill in name, email, and choose a resume file.';
-    }
-    if (!allowedTypes.includes(file.type)) {
-      return 'Only PDF or DOC/DOCX files are allowed.';
-    }
-    if (file.size > maxBytes) {
-      return 'File size must be 5MB or smaller.';
-    }
-    return '';
-  };
-
-  const handleFileChange = (e) => {
-    const chosen = e.target.files?.[0] || null;
-    setFile(chosen);
+  const handleEmailLogin = async () => {
     setError('');
-    setSuccess('');
-  };
-
-  async function withTimeout(promise, ms) {
-    let timeoutId;
-    const timeout = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('Request timed out')), ms);
-    });
-    try {
-      return await Promise.race([promise, timeout]);
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    setUploadedUrl('');
-
-    const validationError = validate();
-    if (validationError) {
-      setError(validationError);
+    if (!email || !password) {
+      setError('Please enter email and password');
       return;
     }
-
-    setIsSubmitting(true);
+    setIsLoading(true);
     try {
-      const timestamp = Date.now();
-      const safeName = name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      const storagePath = `resumes/${timestamp}_${safeName}_${file.name}`;
-      const storageRef = ref(storage, storagePath);
-
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
-      setUploadedUrl(url);
-
-      // Add a hard timeout so UI never hangs if Firestore retries
-      await withTimeout(
-        addDoc(collection(db, 'resumes'), {
-          name: name.trim(),
-          email: email.trim().toLowerCase(),
-          filePath: storagePath,
-          fileURL: url,
-          uploadedAt: serverTimestamp(),
-        }),
-        10000
-      );
-
-      setSuccess('Your resume was uploaded successfully.');
-      setName('');
-      setEmail('');
-      setFile(null);
-    } catch (err) {
-      console.error('Resume upload error:', err);
-      if (uploadedUrl) {
-        setError('Uploaded file saved, but we could not save your details. Please retry later.');
-      } else {
-        setError(err?.message || 'Failed to upload resume. Please try again.');
-      }
+      await login(email, password);
+      router.replace('/ai-resume-parser');
+    } catch (e) {
+      setError(e?.message || 'Failed to sign in.');
     } finally {
-      setIsSubmitting(false);
+      setIsLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setError('');
+    setIsLoading(true);
+    try {
+      await signInWithGoogle();
+      router.replace('/ai-resume-parser');
+    } catch (e) {
+      setError(e?.message || 'Failed to sign in with Google.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <Container maxWidth="md" sx={{ py: 6 }}>
-      <Paper elevation={0} sx={{ p: { xs: 3, md: 4 }, borderRadius: 2 }}>
-        <Typography variant="h5" sx={{ fontWeight: 600, mb: 1 }}>
-          Upload your resume
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Enter your details and attach your resume (PDF or DOC/DOCX). Recruiters will review it.
-        </Typography>
+    <Box
+      sx={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        p: 2,
+        background:
+          'linear-gradient(135deg, rgba(35,89,255,0.08) 0%, rgba(0,0,0,0.02) 100%)',
+      }}
+    >
+      <Paper
+        elevation={0}
+        sx={{
+          width: '100%',
+          maxWidth: 420,
+          p: 4,
+          borderRadius: 2,
+        }}
+      >
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <Box>
+            <Typography variant="h5" sx={{ fontWeight: 600 }}>
+              Welcome back
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Sign in with your email or Google account
+            </Typography>
+          </Box>
 
-        {error ? (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-            {uploadedUrl ? (
-              <>
-                {' '}•{' '}
-                <a href={uploadedUrl} target="_blank" rel="noreferrer">View file</a>
-              </>
-            ) : null}
-          </Alert>
-        ) : null}
-        {success ? (
-          <Alert severity="success" sx={{ mb: 2 }}>
-            {success}
-            {uploadedUrl ? (
-              <>
-                {' '}•{' '}
-                <a href={uploadedUrl} target="_blank" rel="noreferrer">View file</a>
-              </>
-            ) : null}
-          </Alert>
-        ) : null}
+          {error ? (
+            <Box
+              sx={{
+                p: 1.5,
+                bgcolor: 'rgba(255,0,0,0.06)',
+                border: '1px solid rgba(255,0,0,0.2)',
+                borderRadius: 1,
+                color: 'error.main',
+              }}
+            >
+              <Typography variant="body2">{error}</Typography>
+            </Box>
+          ) : null}
 
-        <Box component="form" onSubmit={handleSubmit} noValidate>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <TextField
-              label="Full name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              fullWidth
-            />
             <TextField
               label="Email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              required
               fullWidth
             />
-
-            <Box>
-              <input
-                id="resume-input"
-                type="file"
-                accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                onChange={handleFileChange}
-                style={{ display: 'none' }}
-              />
-              <label htmlFor="resume-input">
-                <Button variant="outlined" component="span">
-                  {file ? 'Change file' : 'Choose resume'}
-                </Button>
-              </label>
-              {file ? (
-                <Typography variant="body2" sx={{ ml: 2, display: 'inline' }}>
-                  {file.name}
-                </Typography>
-              ) : null}
-              <Typography variant="caption" color="text.secondary" display="block">
-                Max size 5MB. Allowed types: PDF, DOC, DOCX.
-              </Typography>
-            </Box>
-
+            <TextField
+              label="Password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              fullWidth
+            />
             <Button
-              type="submit"
               variant="contained"
-              disabled={isSubmitting}
+              onClick={handleEmailLogin}
+              disabled={isLoading}
+              fullWidth
               sx={{ height: 44 }}
             >
-              {isSubmitting ? <CircularProgress size={20} /> : 'Submit'}
+              {isLoading ? <CircularProgress size={20} /> : 'Sign in'}
             </Button>
           </Box>
-        </Box>
 
-        <Divider sx={{ my: 3 }} />
+          <Divider>or</Divider>
 
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-          <Typography variant="body2" color="text.secondary">
-            Are you a recruiter?
-          </Typography>
-          <Button component={Link} href="/login" variant="outlined">
-            Recruiter Login
+          <Button
+            variant="outlined"
+            startIcon={<Google />}
+            onClick={handleGoogleLogin}
+            disabled={isLoading}
+            fullWidth
+            sx={{ height: 44 }}
+          >
+            Continue with Google
           </Button>
         </Box>
       </Paper>
-    </Container>
+    </Box>
   );
 }
